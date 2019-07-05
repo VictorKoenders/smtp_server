@@ -1,0 +1,29 @@
+[package]
+authors = ["Trangar <victor.koenders@gmail.com>"]
+edition = "2018"
+name = "smtp_server"
+version = "0.1.0"
+
+[dependencies]
+failure = "0.1"
+tokio = "0.1"
+tokio-tcp = "0.1"
+tokio-tls = "0.2"
+native-tls = "0.2"
+unicase = "2.4"
+mailparse = "0.8"
+arrayref = "0.3"
+parking_lot = "0.8"
+
+[dependencies.futures-preview]
+features = ["compat", "io-compat"]
+version = "0.3.0-alpha.14"
+
+[dependencies.futures01]
+optional = true
+package = "futures"
+version = "0.1"
+
+[dependencies.phf]
+version = "0.7"
+features = [ "macros" ]
