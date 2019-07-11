@@ -1,99 +1,63 @@
 use crate::connection::State;
+use crate::MailHandlerAsync;
+use futures::channel::mpsc::{unbounded, UnboundedSender};
+use futures::{FutureExt, SinkExt, StreamExt};
 use std::mem;
-use tokio::prelude::{Future, Sink, Stream};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 #[derive(Clone)]
 pub struct Collector {
-    sender: UnboundedSender<Email>,
+    sender: UnboundedSender<OwnedEmail>,
 }
 
-#[derive(Debug)]
-struct Email {
+struct OwnedEmail {
     from: String,
     to: Vec<String>,
     body: String,
 }
 
+#[derive(Debug)]
+pub struct Email<'a> {
+    pub from: String,
+    pub to: Vec<String>,
+    pub body: mailparse::ParsedMail<'a>,
+}
+
 impl Collector {
-    pub fn spawn() -> Collector {
-        let (sender, receiver) = unbounded_channel();
-        tokio::spawn(
-            receiver
-                .map_err(|e| {
-                    eprintln!("Collector crashed: {:?}", e);
-                })
-                .for_each(|email| {
-                    handle_email(email);
-                    Ok(())
-                }),
-        );
+    pub async fn spawn(mut handler: impl MailHandlerAsync + 'static) -> (crate::Future<Result<(), failure::Error>>, Collector) {
+        let (sender, mut receiver) = unbounded::<OwnedEmail>();
+        let fut = runtime::spawn(async move {
+            while let Some(email) = receiver.next().await {
+                let body = email.body;
+                let parsed_body = match mailparse::parse_mail(body.as_bytes()) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("Could not parse mail body");
+                        eprintln!("{:?}", body);
+                        eprintln!("{:?}", e);
+                        eprintln!("-- Ignoring email --");
+                        return Ok(());
+                    }
+                };
 
-        Collector { sender }
-    }
-    pub fn collect(&self, message: &mut State) {
-        let email = Email {
-            from: mem::replace(&mut message.from, Default::default()),
-            to: mem::replace(&mut message.recipient, Default::default()),
-            body: mem::replace(&mut message.body, Default::default()),
-        };
-        tokio::spawn(
-            self.sender
-                .clone()
-                .send(email)
-                .map_err(|e| {
-                    eprintln!("Could not send email to collector: {:?}", e);
-                })
-                .map(|_| ()),
-        );
-    }
-}
+                let email = Email {
+                    from: email.from,
+                    to: email.to,
+                    body: parsed_body,
+                };
 
-fn handle_email(email: Email) {
-    println!("Received email");
-    println!("FROM: {:?}", email.from);
-    for to in email.to {
-        println!("TO: {:?}", to);
+                handler.handle_mail_async(email).await;
+            }
+            Ok(())
+        });
+
+        (fut.boxed(), Collector { sender })
     }
 
-    let mail = match mailparse::parse_mail(email.body.as_bytes()) {
-        Ok(b) => b,
-        Err(e) => {
-            println!("Could not parse body: {:?}", e);
-            return;
-        }
-    };
-
-    print_mail(&mail, 2);
-}
-
-fn print_mail(mail: &mailparse::ParsedMail, indent: usize) {
-    let indent_str = String::from(" ").repeat(indent);
-    println!("{}[HEADERS]", indent_str);
-    for header in &mail.headers {
-        println!(
-            "{}{} = {}",
-            indent_str,
-            header
-                .get_key()
-                .unwrap_or_else(|e| format!("[ERR {:?}]", e)),
-            header
-                .get_value()
-                .unwrap_or_else(|e| format!("[ERR {:?}]", e))
-        );
+    pub async fn collect(&mut self, message: &mut State) -> Result<(), failure::Error> {
+        let from = mem::replace(&mut message.from, Default::default());
+        let to = mem::replace(&mut message.recipient, Default::default());
+        let body = mem::replace(&mut message.body, Default::default());
+        self.sender.send(OwnedEmail { from, to, body }).await?;
+        Ok(())
     }
-    println!();
-    println!("{}[BODY]", indent_str);
-    println!(
-        "{}{}",
-        indent_str,
-        mail.get_body()
-            .unwrap_or_else(|e| format!("Could not get body: {:?}", e))
-    );
-    println!();
-    println!("{}[CHILDREN]", indent_str);
-    for subpart in &mail.subparts {
-        print_mail(subpart, indent + 2);
-    }
-    println!();
 }

@@ -1,92 +1,60 @@
-#![feature(async_await, await_macro, proc_macro_hygiene)]
-#![allow(warnings)]
+#![feature(async_await)]
 
-mod collector;
-mod config;
-mod connection;
-mod message_parser;
+use smtp_server::{mailparse::ParsedMail, Config, Email, MailHandler};
 
-pub use crate::collector::Collector;
-pub use crate::config::{Config, ConfigFeature};
-pub use crate::connection::{Connection, State};
-use futures::{
-    compat::{AsyncRead01CompatExt, AsyncWrite01CompatExt, Stream01CompatExt},
-    future::{FutureExt, TryFutureExt},
-    io::{AsyncReadExt, AsyncWriteExt},
-    stream::StreamExt,
-};
-use parking_lot::RwLock;
-use std::collections::VecDeque;
-use std::io::Read;
-use std::sync::Arc;
-use tokio::io::AsyncRead;
-use tokio_tcp::{TcpListener, TcpStream};
+#[runtime::main]
+async fn main() {
+    let config = Config::build("localhost")
+        // .with_tls_from_pfx("identity.pfx").expect("Could not load identity.pfx")
+        .build();
 
-fn main() {
-    let future03 = futures::future::lazy(|_| {
-        let mut file = std::fs::File::open("identity.pfx").expect("Could not load identity.pfx");
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)
-            .expect("Could not read identity.pfx");
-        drop(file);
-
-        let acceptor = native_tls::TlsAcceptor::new(
-            native_tls::Identity::from_pkcs12(&contents, "").expect("Could not parse identity.pfx"),
-        )
-        .expect("Could not create a TLS Acceptor");
-        let acceptor = tokio_tls::TlsAcceptor::from(acceptor);
-
-        let config = Arc::new(RwLock::new(Config {
-            host: String::from("localhost"),
-            tls_acceptor: acceptor,
-            features: vec![
-                ConfigFeature::Tls,
-                ConfigFeature::Auth(String::from("TEXT PLAIN")),
-            ],
-        }));
-
-        let collector = Collector::spawn();
-        tokio::spawn(
-            start_on_port(25, collector.clone(), config.clone())
-                .map_err(|e| {
-                    eprintln!("Start failed: {:?}", e);
-                })
-                .boxed()
-                .compat(),
-        );
-        tokio::spawn(
-            start_on_port(587, collector.clone(), config.clone())
-                .map_err(|e| {
-                    eprintln!("Start failed: {:?}", e);
-                })
-                .boxed()
-                .compat(),
-        );
-    });
-    tokio::run(future03.unit_error().compat());
+    if let Err(err) = smtp_server::spawn(config, Handler).await {
+        eprintln!("SMTP server crashed: {:?}", err);
+    }
+    eprintln!("Server stopping");
 }
 
-async fn start_on_port(
-    port: u16,
-    collector: Collector,
-    config: Arc<RwLock<Config>>,
-) -> Result<(), failure::Error> {
-    println!("Listening on port {:?}", port);
-    let srv = TcpListener::bind(&([0u8, 0, 0, 0], port).into())?;
-    let mut stream = srv.incoming().compat();
+struct Handler;
 
-    while let Some(client) = stream.next().await {
-        let client = match client {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Could not accept client: {:?}", e);
-                break;
-            }
-        };
-        let peer_addr = client.peer_addr();
-        println!("Received client {:?} on port {}", peer_addr, port);
-        crate::connection::Connection::spawn(client, collector.clone(), config.clone());
+impl MailHandler for Handler {
+    fn handle_mail(&mut self, email: Email) {
+        println!("Received email");
+        println!("FROM: {:?}", email.from);
+        for to in email.to {
+            println!("TO: {:?}", to);
+        }
+
+        print_mail(&email.body, 2);
     }
+}
 
-    Ok(())
+fn print_mail(mail: &ParsedMail, indent: usize) {
+    let indent_str = String::from(" ").repeat(indent);
+    println!("{}[HEADERS]", indent_str);
+    for header in &mail.headers {
+        println!(
+            "{}{} = {}",
+            indent_str,
+            header
+                .get_key()
+                .unwrap_or_else(|e| format!("[ERR {:?}]", e)),
+            header
+                .get_value()
+                .unwrap_or_else(|e| format!("[ERR {:?}]", e))
+        );
+    }
+    println!();
+    println!("{}[BODY]", indent_str);
+    println!(
+        "{}{}",
+        indent_str,
+        mail.get_body()
+            .unwrap_or_else(|e| format!("Could not get body: {:?}", e))
+    );
+    println!();
+    println!("{}[CHILDREN]", indent_str);
+    for subpart in &mail.subparts {
+        print_mail(subpart, indent + 2);
+    }
+    println!();
 }

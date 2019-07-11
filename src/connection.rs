@@ -1,31 +1,20 @@
 use crate::collector::Collector;
 use crate::config::Config;
-use crate::message_parser::{ByteOrEnd, MessageParser};
-use futures::compat::Compat01As03;
-use futures::{
-    compat::{AsyncRead01CompatExt, AsyncWrite01CompatExt, Compat01As03Sink, Stream01CompatExt},
-    future::{FutureExt, TryFutureExt},
-    io::{AsyncReadExt, AsyncWriteExt},
-    sink::{Sink, SinkExt},
-    stream::StreamExt,
-};
-use native_tls::TlsConnector as NativeTlsConnector;
-use parking_lot::RwLock;
+use crate::message_parser::MessageParser;
+use futures::io::AsyncWriteExt;
+use futures::stream::StreamExt;
+use runtime::net::TcpStream;
 use std::borrow::Cow;
-use std::sync::Arc;
-use tokio::codec::Framed;
-use tokio::codec::{Decoder, Encoder, LinesCodec};
-use tokio::net::TcpStream;
-use tokio::prelude::Stream;
-use tokio_tls::TlsConnector;
-use unicase::UniCase;
 
 pub struct Connection;
 
 impl Connection {
-    pub fn spawn(client: TcpStream, collector: Collector, config: Arc<RwLock<Config>>) {
-        tokio::spawn(
-            Connection::run(client, collector, config)
+    /*
+    pub fn spawn_tls(client: TcpStream, collector: Collector, config: Config) {
+        runtime::spawn(async {
+
+        }
+            Connection::run_tls(client, collector, Default::default(), config)
                 .map_err(|e| {
                     eprintln!("Could not run connection: {:?}", e);
                 })
@@ -33,75 +22,86 @@ impl Connection {
                 .compat(),
         );
     }
+    */
 
-    // TODO: Merge the functions `run` and `run_tls`
-    // Currently we can't because we have a framed(&client), because we need to reunite the sink/stream later. The issue is that:
-    // - TlsStream does not support reading from &client (https://github.com/tokio-rs/tokio/issues/1239)
-    // - We can't re-unite client because it's contained in  the Compat layer
-    // We can fix this issue when either of the following issues is resolved:
-    // - tokio supports futures03: https://github.com/tokio-rs/tokio/issues/1194
-    // - futures-rs supports .into_inner(): https://github.com/rust-lang-nursery/futures-rs/pull/1705
-    // In the `LineResponse::Upgrade` branch of the inner match statements, we should `reunite` the `split` that happened:
-    // https://docs.rs/tokio/0.1.22/tokio/prelude/stream/struct.SplitSink.html#method.reunite
-    // That means we don't have to create a linecodec with a reference, but the actual TcpStream
-    async fn run(
-        client: TcpStream,
-        collector: Collector,
-        config: Arc<RwLock<Config>>,
+    pub async fn run(
+        mut client: TcpStream,
+        mut collector: Collector,
+        config: Config,
     ) -> Result<(), failure::Error> {
+        /*
         let reader = LinesCodec::new().framed(&client);
         let (sink, stream) = reader.split();
         let mut sink = Compat01As03Sink::<_, String>::new(sink);
         let mut stream = Compat01As03::new(stream);
+        */
         let mut state = State::default();
 
-        sink.send(format!("220 {} ESMTP MailServer", config.read().host))
-            .await?;
+        let msg = format!("220 {} ESMTP MailServer\r\n", config.host);
+        client.write_all(msg.as_bytes()).await?;
+        println!("Wrote hello");
 
-        while let Some(line) = stream.next().await {
+        let mut reader = crate::line_reader::LineReader::new(client);
+
+        while let Some(line) = reader.next().await {
             let line = line?;
             match state.message_received(&line) {
                 LineResponse::None => {}
                 LineResponse::Upgrade => {
-                    println!("Upgrading request");
-                    sink.send(String::from("220 Go ahead")).await?;
-                    drop(sink);
-                    drop(stream);
+                    reader.reader.write_all(b"500 Not implemented\r\n").await?;
+                    /*println!("Upgrading request");
+                    client.write_all(b"220 Go ahead").await?;
                     return Connection::run_tls(client, collector, state, config).await;
+                    */
                 }
                 LineResponse::ReplyWith(msg) => {
-                    sink.send(msg.into_owned()).await?;
+                    reader.reader.write_all(msg.as_bytes()).await?;
+                    reader.reader.write_all(b"\r\n").await?;
                 }
                 LineResponse::ReplyWithMultiple(msg) => {
                     for msg in msg {
-                        sink.send(msg.into_owned()).await?;
+                        reader.reader.write_all(msg.as_bytes()).await?;
+                        reader.reader.write_all(b"\r\n").await?;
                     }
                 }
                 LineResponse::Done => {
-                    sink.send(String::from("250 Ok: Message received, over"))
+                    reader
+                        .reader
+                        .write_all(b"250 Ok: Message received, over\r\n")
                         .await?;
-                    collector.collect(&mut state);
+                    collector.collect(&mut state).await?;
                     state = Default::default();
                 }
-                LineResponse::Err(e) => return Err(e),
+                LineResponse::Quit => {
+                    reader.reader.write_all(b"200 Come back soon!\r\n").await?;
+                    break;
+                } // LineResponse::Err(e) => return Err(e),
             }
         }
         Ok(())
     }
-
+    /*
     async fn run_tls(
         client: TcpStream,
         collector: Collector,
-        state: State,
-        config: Arc<RwLock<Config>>,
+        mut state: State,
+        config: Config,
     ) -> Result<(), failure::Error> {
-        let stream = Compat01As03::new(config.read().tls_acceptor.accept(client)).await?;
+        let config = config.read();
+        let tls_acceptor = match config.tls_acceptor.as_ref() {
+            Some(t) => t,
+            None => {
+                eprintln!("Tried to accept TLS connection, but TLS was not configured");
+                eprintln!("Please call `config_builder.with_tls_from_pfx(\"identity.pfx\").expect(\"Could not load identity.pfx\")`");
+                failure::bail!("TLS not implemented");
+            }
+        };
+        let stream = Compat01As03::new(tls_acceptor.accept(client)).await?;
 
         let reader = LinesCodec::new().framed(stream);
         let (sink, stream) = reader.split();
         let mut sink = Compat01As03Sink::<_, String>::new(sink);
         let mut stream = Compat01As03::new(stream);
-        let mut state = State::default();
 
         while let Some(line) = stream.next().await {
             let line: String = line?;
@@ -123,12 +123,12 @@ impl Connection {
                         .await?;
                     collector.collect(&mut state);
                     state = Default::default();
-                }
-                LineResponse::Err(e) => return Err(e),
+                } // LineResponse::Err(e) => return Err(e),
             }
         }
         Ok(())
     }
+    */
 }
 
 #[derive(Default, Debug)]
@@ -140,24 +140,28 @@ pub struct State {
     is_reading_body: bool,
 }
 
-type StateFn = &'static (Sync + Fn(&mut State, MessageParser) -> LineResponse);
+type StateFn = &'static (dyn Sync + Fn(&mut State, MessageParser) -> LineResponse);
 
-static SMTP_COMMANDS: phf::Map<&'static [u8; 4], StateFn> = phf::phf_map! {
-    b"EHLO" => &handle_ehlo,
-    b"MAIL" => &handle_mail,
-    b"RCPT" => &handle_recipient,
-    b"SIZE" => &handle_size,
-    b"DATA" => &handle_data,
-    b"VRFY" => &handle_verify,
-    b"TURN" => &handle_turn,
-    b"AUTH" => &handle_auth,
-    b"RSET" => &handle_reset,
-    b"EXPN" => &handle_expn,
-    b"HELP" => &handle_help,
-    b"QUIT" => &handle_quit,
-};
+lazy_static::lazy_static! {
+    static ref SMTP_COMMANDS: std::collections::HashMap<&'static [u8; 4], StateFn> = {
+        let mut map = std::collections::HashMap::<&'static [u8; 4], StateFn>::new();
+        map.insert(b"EHLO", &handle_ehlo);
+        map.insert(b"MAIL", &handle_mail);
+        map.insert(b"RCPT", &handle_recipient);
+        map.insert(b"SIZE", &handle_size);
+        map.insert(b"DATA", &handle_data);
+        map.insert(b"VRFY", &handle_verify);
+        map.insert(b"TURN", &handle_turn);
+        map.insert(b"AUTH", &handle_auth);
+        map.insert(b"RSET", &handle_reset);
+        map.insert(b"EXPN", &handle_expn);
+        map.insert(b"HELP", &handle_help);
+        map.insert(b"QUIT", &handle_quit);
+        map
+    };
+}
 
-fn handle_ehlo(state: &mut State, mut parser: MessageParser) -> LineResponse {
+fn handle_ehlo(state: &mut State, _parser: MessageParser) -> LineResponse {
     state.ehlo_received = true;
     LineResponse::ReplyWithMultiple(vec![
         "250-localhost, I'm glad to meet you".into(),
@@ -172,8 +176,8 @@ fn handle_mail(state: &mut State, mut parser: MessageParser) -> LineResponse {
     }
     match parser.consume_word_until(COLON) {
         Some(word) => {
-            let word = UniCase::ascii(word);
-            if word.eq(&UniCase::ascii("FROM")) {
+            let word = word.to_ascii_uppercase();
+            if word == "FROM" {
                 println!("[MAIL] from {}", parser.remaining());
                 state.from = parser.remaining().to_owned();
                 "250 I'll let them know".into()
@@ -191,8 +195,8 @@ fn handle_recipient(state: &mut State, mut parser: MessageParser) -> LineRespons
     }
     match parser.consume_word_until(COLON) {
         Some(word) => {
-            let word = UniCase::ascii(word);
-            if word.eq(&UniCase::ascii("TO")) {
+            let word = word.to_ascii_uppercase();
+            if word == "TO" {
                 println!("[MAIL] to {}", parser.remaining(),);
                 let recipient = parser.remaining();
                 state.recipient.push(recipient.to_owned());
@@ -210,7 +214,7 @@ fn handle_size(_state: &mut State, mut _parser: MessageParser) -> LineResponse {
     "500 Not implemented".into()
 }
 
-fn handle_data(state: &mut State, mut parser: MessageParser) -> LineResponse {
+fn handle_data(state: &mut State, mut _parser: MessageParser) -> LineResponse {
     state.is_reading_body = true;
     "354 Go on, I'm listening... (end with \\r\\n.\\r\\n)".into()
 }
@@ -230,7 +234,7 @@ fn handle_auth(_state: &mut State, mut _parser: MessageParser) -> LineResponse {
     "500 Not implemented".into()
 }
 
-fn handle_reset(state: &mut State, mut parser: MessageParser) -> LineResponse {
+fn handle_reset(state: &mut State, mut _parser: MessageParser) -> LineResponse {
     *state = Default::default();
     "200 It's all gone".into()
 }
@@ -246,10 +250,9 @@ fn handle_help(_state: &mut State, mut _parser: MessageParser) -> LineResponse {
 }
 
 fn handle_quit(_state: &mut State, mut _parser: MessageParser) -> LineResponse {
-    "221 Come back soon!".into()
+    LineResponse::Quit
 }
 
-const SPACE: u8 = b' ';
 const COLON: u8 = b':';
 
 impl State {
@@ -264,10 +267,11 @@ impl State {
                 self.body += "\r\n";
                 LineResponse::None
             }
-        } else if msg.get(..8) == Some("STARTTLS") {
+        } else if msg.get(..8).map(|m| m.to_ascii_uppercase()) == Some(String::from("STARTTLS")) {
             LineResponse::Upgrade
-        } else if let Some(bytes) = msg.as_bytes().get(..4) {
-            let bytes: &[u8; 4] = arrayref::array_ref![bytes, 0, 4];
+        } else if let Some(chars) = msg.get(..4) {
+            let upper_case = chars.to_ascii_uppercase();
+            let bytes: &[u8; 4] = arrayref::array_ref![upper_case.as_bytes(), 0, 4];
             if let Some(cmd) = SMTP_COMMANDS.get(bytes) {
                 let parser = MessageParser::new(msg[4..].trim());
                 cmd(self, parser)
@@ -289,7 +293,8 @@ enum LineResponse {
     ReplyWithMultiple(Vec<Cow<'static, str>>),
     Upgrade,
     Done,
-    Err(failure::Error),
+    Quit,
+    // Err(failure::Error),
 }
 
 impl From<String> for LineResponse {

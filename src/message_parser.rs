@@ -3,12 +3,6 @@ pub struct MessageParser<'a> {
     offset: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ByteOrEnd {
-    Byte,
-    End,
-}
-
 impl<'a> MessageParser<'a> {
     pub fn new(s: &'a str) -> MessageParser<'a> {
         MessageParser {
