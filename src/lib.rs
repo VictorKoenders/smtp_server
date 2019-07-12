@@ -6,13 +6,17 @@
     pin_into_inner
 )]
 
+pub extern crate log;
 pub extern crate mailparse;
 
+#[macro_use]
+mod tcp_stream_helper;
 mod collector;
 mod config;
 mod connection;
 mod line_reader;
 mod message_parser;
+// mod tls_stream;
 
 pub use crate::collector::Email;
 pub use crate::config::{Config, ConfigFeature};
@@ -63,7 +67,7 @@ async fn spawn_tcp(config: Config, collector: Collector) -> Result<(), failure::
             .iter_mut()
             .map(|s| s.incoming().map_err(failure::Error::from)),
     );
-    println!("Listening on port 25");
+    log::info!("Listening on port 25");
 
     select
         .try_for_each_concurrent(None, |client| {
@@ -72,14 +76,14 @@ async fn spawn_tcp(config: Config, collector: Collector) -> Result<(), failure::
             runtime::spawn(async move {
                 let peer_addr = client.peer_addr();
                 let local_port = client.local_addr().map(|a| a.port()).unwrap_or(0);
-                println!("Received client {:?} on port {}", peer_addr, local_port);
+                log::info!("Received client {:?} on port {}", peer_addr, local_port);
                 if let Err(e) =
                     crate::connection::Connection::run(client, collector.clone(), config.clone())
                         .await
                 {
-                    eprintln!("Client error: {:?}", e);
+                    log::error!("Client error: {:?}", e);
                 }
-                println!("Client {:?} done", peer_addr);
+                log::info!("Client {:?} done", peer_addr);
                 Ok(())
             })
         })

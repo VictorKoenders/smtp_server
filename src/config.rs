@@ -1,9 +1,10 @@
+use std::borrow::Cow;
 /*use std::path::Path;
 use std::io::Read;
 use std::fs::File;
 use failure::{ResultExt, format_err};*/
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config {
     pub host: String,
     // pub tls_acceptor: Option<tokio_tls::TlsAcceptor>,
@@ -19,10 +20,19 @@ impl Config {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum ConfigFeature {
     Auth(String),
     Tls,
+}
+
+impl ConfigFeature {
+    pub fn as_ehlo_tag(&self) -> Option<Cow<'static, str>> {
+        match self {
+            ConfigFeature::Auth(s) => Some(format!("AUTH {}", s).into()),
+            ConfigFeature::Tls => Some("STARTTLS".into()),
+        }
+    }
 }
 
 #[derive(Default)]

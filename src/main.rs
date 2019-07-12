@@ -4,6 +4,7 @@ use smtp_server::{mailparse::ParsedMail, Config, Email, MailHandler};
 
 #[runtime::main]
 async fn main() {
+    env_logger::init();
     let config = Config::build("localhost")
         // .with_tls_from_pfx("identity.pfx").expect("Could not load identity.pfx")
         .build();

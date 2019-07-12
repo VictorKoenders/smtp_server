@@ -23,7 +23,9 @@ pub struct Email<'a> {
 }
 
 impl Collector {
-    pub async fn spawn(mut handler: impl MailHandlerAsync + 'static) -> (crate::Future<Result<(), failure::Error>>, Collector) {
+    pub async fn spawn(
+        mut handler: impl MailHandlerAsync + 'static,
+    ) -> (crate::Future<Result<(), failure::Error>>, Collector) {
         let (sender, mut receiver) = unbounded::<OwnedEmail>();
         let fut = runtime::spawn(async move {
             while let Some(email) = receiver.next().await {
@@ -31,10 +33,10 @@ impl Collector {
                 let parsed_body = match mailparse::parse_mail(body.as_bytes()) {
                     Ok(b) => b,
                     Err(e) => {
-                        eprintln!("Could not parse mail body");
-                        eprintln!("{:?}", body);
-                        eprintln!("{:?}", e);
-                        eprintln!("-- Ignoring email --");
+                        log::error!("Could not parse mail body");
+                        log::error!("{:?}", body);
+                        log::error!("{:?}", e);
+                        log::error!("-- Ignoring email --");
                         return Ok(());
                     }
                 };
