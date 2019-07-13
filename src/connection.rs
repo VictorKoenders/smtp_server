@@ -6,125 +6,115 @@ use futures::stream::StreamExt;
 use runtime::net::TcpStream;
 use std::borrow::Cow;
 
-pub struct Connection;
+/*
+pub fn spawn_tls(client: TcpStream, collector: Collector, config: Config) {
+    runtime::spawn(async {
 
-impl Connection {
-    /*
-    pub fn spawn_tls(client: TcpStream, collector: Collector, config: Config) {
-        runtime::spawn(async {
-
-        }
-            Connection::run_tls(client, collector, Default::default(), config)
-                .map_err(|e| {
-                    log::error!("Could not run connection: {:?}", e);
-                })
-                .boxed()
-                .compat(),
-        );
     }
-    */
+        run_tls(client, collector, Default::default(), config)
+            .map_err(|e| {
+                log::error!("Could not run connection: {:?}", e);
+            })
+            .boxed()
+            .compat(),
+    );
+}
+*/
 
-    pub async fn run(
-        mut client: TcpStream,
-        mut collector: Collector,
-        config: Config,
-    ) -> Result<(), failure::Error> {
-        /*
-        let reader = LinesCodec::new().framed(&client);
-        let (sink, stream) = reader.split();
-        let mut sink = Compat01As03Sink::<_, String>::new(sink);
-        let mut stream = Compat01As03::new(stream);
-        */
-        let mut state = State::default();
-        let ip = crate::tcp_stream_helper::get_ip(&client);
+pub async fn run(
+    mut client: TcpStream,
+    mut collector: Collector,
+    config: Config,
+) -> Result<(), failure::Error> {
+    let mut state = State::default();
+    let ip = crate::tcp_stream_helper::get_ip(&client);
 
-        log_and_send!(client, "220 {} ESMTP MailServer", config.host);
+    log_and_send!(client, "220 {} ESMTP MailServer", config.host);
 
-        let mut reader = crate::line_reader::LineReader::new(client);
+    let mut reader = crate::line_reader::LineReader::new(client);
 
-        while let Some(line) = reader.next().await {
-            let line = line?;
-            log::trace!("[{}]  IN: {}", ip, line);
-            match state.message_received(&line, &config) {
-                LineResponse::None => {}
-                LineResponse::Upgrade => {
-                    log_and_send!(reader.reader, "500 Not implemented");
-                    /*log::debug!("Upgrading request");
-                    client.write_all(b"220 Go ahead").await?;
-                    return Connection::run_tls(client, collector, state, config).await;
-                    */
-                }
-                LineResponse::ReplyWith(msg) => {
+    while let Some(line) = reader.next().await {
+        let line = line?;
+        log::trace!("[{}]  IN: {}", ip, line);
+        match state.message_received(&line, &config) {
+            LineResponse::None => {}
+            LineResponse::Upgrade => {
+                log_and_send!(reader.reader, "500 Not implemented");
+                /*log::debug!("Upgrading request");
+                client.write_all(b"220 Go ahead").await?;
+                return run_tls(client, collector, state, config).await;
+                */
+            }
+            LineResponse::ReplyWith(msg) => {
+                log_and_send!(reader.reader, msg);
+            }
+            LineResponse::ReplyWithMultiple(msg) => {
+                for msg in msg {
                     log_and_send!(reader.reader, msg);
                 }
-                LineResponse::ReplyWithMultiple(msg) => {
-                    for msg in msg {
-                        log_and_send!(reader.reader, msg);
-                    }
-                }
-                LineResponse::Done => {
-                    log_and_send!(reader.reader, "250 Ok: Message received, over");
-                    collector.collect(&mut state).await?;
-                    state = Default::default();
-                }
-                LineResponse::Quit => {
-                    log_and_send!(reader.reader, "200 Come back soon!");
-                    break;
-                } // LineResponse::Err(e) => return Err(e),
+            }
+            LineResponse::Done => {
+                log_and_send!(reader.reader, "250 Ok: Message received, over");
+                collector.collect(&mut state).await?;
+                state = Default::default();
+            }
+            LineResponse::Quit => {
+                log_and_send!(reader.reader, "200 Come back soon!");
+                break;
             }
         }
-        Ok(())
     }
-    /*
-    async fn run_tls(
-        client: TcpStream,
-        collector: Collector,
-        mut state: State,
-        config: Config,
-    ) -> Result<(), failure::Error> {
-        let config = config.read();
-        let tls_acceptor = match config.tls_acceptor.as_ref() {
-            Some(t) => t,
-            None => {
-                log::error!("Tried to accept TLS connection, but TLS was not configured");
-                log::error!("Please call `config_builder.with_tls_from_pfx(\"identity.pfx\").expect(\"Could not load identity.pfx\")`");
-                failure::bail!("TLS not implemented");
+    Ok(())
+}
+/*
+async fn run_tls(
+    client: TcpStream,
+    collector: Collector,
+    mut state: State,
+    config: Config,
+) -> Result<(), failure::Error> {
+    let config = config.read();
+    let tls_acceptor = match config.tls_acceptor.as_ref() {
+        Some(t) => t,
+        None => {
+            log::error!("Tried to accept TLS connection, but TLS was not configured");
+            log::error!("Please call `config_builder.with_tls_from_pfx(\"identity.pfx\").expect(\"Could not load identity.pfx\")`");
+            failure::bail!("TLS not implemented");
+        }
+    };
+    let stream = Compat01As03::new(tls_acceptor.accept(client)).await?;
+
+    let reader = LinesCodec::new().framed(stream);
+    let (sink, stream) = reader.split();
+    let mut sink = Compat01As03Sink::<_, String>::new(sink);
+    let mut stream = Compat01As03::new(stream);
+
+    while let Some(line) = stream.next().await {
+        let line: String = line?;
+        match state.message_received(&line) {
+            LineResponse::None => {}
+            LineResponse::Upgrade => {
+                sink.send(String::from("500 Already upgraded")).await?;
             }
-        };
-        let stream = Compat01As03::new(tls_acceptor.accept(client)).await?;
-
-        let reader = LinesCodec::new().framed(stream);
-        let (sink, stream) = reader.split();
-        let mut sink = Compat01As03Sink::<_, String>::new(sink);
-        let mut stream = Compat01As03::new(stream);
-
-        while let Some(line) = stream.next().await {
-            let line: String = line?;
-            match state.message_received(&line) {
-                LineResponse::None => {}
-                LineResponse::Upgrade => {
-                    sink.send(String::from("500 Already upgraded")).await?;
-                }
-                LineResponse::ReplyWith(msg) => {
+            LineResponse::ReplyWith(msg) => {
+                sink.send(msg.into_owned()).await?;
+            }
+            LineResponse::ReplyWithMultiple(msg) => {
+                for msg in msg {
                     sink.send(msg.into_owned()).await?;
                 }
-                LineResponse::ReplyWithMultiple(msg) => {
-                    for msg in msg {
-                        sink.send(msg.into_owned()).await?;
-                    }
-                }
-                LineResponse::Done => {
-                    sink.send(String::from("250 Ok: Message received, over"))
-                        .await?;
-                    collector.collect(&mut state);
-                    state = Default::default();
-                } // LineResponse::Err(e) => return Err(e),
             }
+            LineResponse::Done => {
+                sink.send(String::from("250 Ok: Message received, over"))
+                    .await?;
+                collector.collect(&mut state);
+                state = Default::default();
+            } // LineResponse::Err(e) => return Err(e),
         }
-        Ok(())
     }
-    */
+    Ok(())
 }
+*/
 
 #[derive(Default, Debug)]
 pub struct State {

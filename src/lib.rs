@@ -16,7 +16,6 @@ mod config;
 mod connection;
 mod line_reader;
 mod message_parser;
-// mod tls_stream;
 
 pub use crate::collector::Email;
 pub use crate::config::{Config, ConfigFeature};
@@ -26,7 +25,7 @@ use futures::{FutureExt, TryStreamExt};
 use runtime::net::TcpListener;
 use std::pin::Pin;
 
-pub type Future<T> = Pin<Box<dyn std::future::Future<Output = T> + Send>>;
+type Future<T> = Pin<Box<dyn std::future::Future<Output = T> + Send>>;
 
 pub trait MailHandler: Send {
     fn handle_mail(&mut self, mail: Email);
@@ -78,8 +77,7 @@ async fn spawn_tcp(config: Config, collector: Collector) -> Result<(), failure::
                 let local_port = client.local_addr().map(|a| a.port()).unwrap_or(0);
                 log::info!("Received client {:?} on port {}", peer_addr, local_port);
                 if let Err(e) =
-                    crate::connection::Connection::run(client, collector.clone(), config.clone())
-                        .await
+                    crate::connection::run(client, collector.clone(), config.clone()).await
                 {
                     log::error!("Client error: {:?}", e);
                 }
