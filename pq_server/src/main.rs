@@ -114,29 +114,27 @@ fn try_save_email(transaction: &mut Transaction, email: Email) -> Result<(), fai
     Ok(())
 }
 
-impl MailHandler for Handler {
-    fn handle_mail(&mut self, email: Email) {
-        let mut transaction = match self.client.transaction() {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("Could not start DB transaction");
-                eprintln!("Email is LOST");
-                eprintln!("{:?}", e);
-                return;
-            }
-        };
-        let transaction_result = if let Err(e) = try_save_email(&mut transaction, email) {
-            eprintln!("Could not save email: {:?}", e);
-            eprintln!("Email is LOST");
-            transaction.rollback()
-        } else {
-            transaction.commit()
-        };
+fn try_run_transaction(client: &mut Client, email: Email) -> Result<bool, failure::Error> {
+    let mut transaction = client.transaction()?;
+    if let Err(e) = try_save_email(&mut transaction, email) {
+        eprintln!("Could not save email: {:?}", e);
+        eprintln!("Email is LOST");
+        transaction.rollback()?;
+        Ok(false)
+    } else {
+        transaction.commit()?;
+        Ok(true)
+    }
+}
 
-        if let Err(e) = transaction_result {
-            eprintln!("Could not finish or roll back transaction");
-            eprintln!("Email is LOST");
-            eprintln!("{:?}", e);
+impl MailHandler for Handler {
+    fn handle_mail(&mut self, email: Email) -> bool {
+        match try_run_transaction(&mut self.client, email){
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("Could not handle DB transaction: {:?}", e);
+                false
+            }
         }
     }
 }
@@ -240,13 +238,13 @@ fn table_exists(client: &mut Client, table_name: &str) -> bool {
 
 fn create_table(client: &mut Client, name: &str, fields: &[(&str, &str)], additional: &[&str]) {
     let mut query = String::new();
-    write!(&mut query, "CREATE TABLE \"{}\" (\n", name).unwrap();
+    writeln!(&mut query, "CREATE TABLE \"{}\" (", name).unwrap();
     let mut first = true;
     for (name, r#type) in fields {
         if first {
             first = false;
         } else {
-            write!(&mut query, ",\n").unwrap()
+            writeln!(&mut query, ",").unwrap()
         }
         write!(&mut query, "\t\"{}\" {}", name, r#type).unwrap();
     }
@@ -254,7 +252,7 @@ fn create_table(client: &mut Client, name: &str, fields: &[(&str, &str)], additi
         if first {
             first = false;
         } else {
-            write!(&mut query, ",\n").unwrap()
+            writeln!(&mut query, ",").unwrap()
         }
         write!(&mut query, "\t{}", add).unwrap();
     }

@@ -1,13 +1,13 @@
 use crate::connection::State;
 use crate::MailHandlerAsync;
-use futures::channel::mpsc::{unbounded, UnboundedSender};
+use futures::channel::{mpsc, oneshot};
 use futures::{FutureExt, SinkExt, StreamExt};
 use std::mem;
 use std::net::SocketAddr;
 
 #[derive(Clone)]
 pub struct Collector {
-    sender: UnboundedSender<OwnedEmail>,
+    sender: mpsc::UnboundedSender<OwnedEmail>,
 }
 
 struct OwnedEmail {
@@ -16,6 +16,7 @@ struct OwnedEmail {
     from: String,
     to: Vec<String>,
     body: String,
+    returner: oneshot::Sender<bool>,
 }
 
 #[derive(Debug)]
@@ -31,7 +32,7 @@ impl Collector {
     pub async fn spawn(
         mut handler: impl MailHandlerAsync + 'static,
     ) -> (crate::Future<Result<(), failure::Error>>, Collector) {
-        let (sender, mut receiver) = unbounded::<OwnedEmail>();
+        let (sender, mut receiver) = mpsc::unbounded::<OwnedEmail>();
         let fut = runtime::spawn(async move {
             while let Some(email) = receiver.next().await {
                 println!("{:?}", email.body);
@@ -46,6 +47,7 @@ impl Collector {
                         return Ok(());
                     }
                 };
+                let returner = email.returner;
 
                 let email = Email {
                     peer_addr: email.peer_addr,
@@ -55,7 +57,8 @@ impl Collector {
                     body: parsed_body,
                 };
 
-                handler.handle_mail_async(email).await;
+                let result = handler.handle_mail_async(email).await;
+                let _ = returner.send(result);
             }
             Ok(())
         });
@@ -68,10 +71,11 @@ impl Collector {
         message: &mut State,
         peer_addr: SocketAddr,
         is_ssl: bool,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<bool, failure::Error> {
         let from = mem::replace(&mut message.from, Default::default());
         let to = mem::replace(&mut message.recipient, Default::default());
         let body = mem::replace(&mut message.body, Default::default());
+        let (sender, receiver) = futures::channel::oneshot::channel();
         self.sender
             .send(OwnedEmail {
                 from,
@@ -79,8 +83,10 @@ impl Collector {
                 body,
                 peer_addr,
                 used_ssl: is_ssl,
+                returner: sender
             })
             .await?;
-        Ok(())
+        let result = receiver.await?;
+        Ok(result)
     }
 }

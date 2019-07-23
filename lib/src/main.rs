@@ -18,7 +18,7 @@ async fn main() {
 struct Handler;
 
 impl MailHandler for Handler {
-    fn handle_mail(&mut self, email: Email) {
+    fn handle_mail(&mut self, email: Email) -> bool {
         println!("Received email");
         println!("FROM: {:?}", email.from);
         for to in email.to {
@@ -26,6 +26,7 @@ impl MailHandler for Handler {
         }
 
         print_mail(&email.body, 2);
+        true
     }
 }
 

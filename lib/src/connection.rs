@@ -55,8 +55,12 @@ pub async fn run(
                 }
             }
             LineResponse::Done => {
-                log_and_send!(reader.reader, "250 Ok: Message received, over");
-                collector.collect(&mut state, addr, false).await?;
+                let collected_ok = collector.collect(&mut state, addr, false).await?;
+                if collected_ok {
+                    log_and_send!(reader.reader, "250 Ok: Message received, over");
+                } else {
+                    log_and_send!(reader.reader, "500 Internal server error");
+                }
                 state = Default::default();
             }
             LineResponse::Quit => {

@@ -28,20 +28,20 @@ use std::pin::Pin;
 type Future<T> = Pin<Box<dyn std::future::Future<Output = T> + Send>>;
 
 pub trait MailHandler: Send {
-    fn handle_mail(&mut self, mail: Email);
+    fn handle_mail(&mut self, mail: Email) -> bool;
 }
 
 pub trait MailHandlerAsync: Send {
-    fn handle_mail_async(&mut self, mail: Email) -> Future<()>;
+    fn handle_mail_async(&mut self, mail: Email) -> Future<bool>;
 }
 
 impl<T> MailHandlerAsync for T
 where
     T: MailHandler,
 {
-    fn handle_mail_async(&mut self, mail: Email) -> Future<()> {
-        self.handle_mail(mail);
-        futures::future::ready(()).boxed()
+    fn handle_mail_async(&mut self, mail: Email) -> Future<bool> {
+        let result = self.handle_mail(mail);
+        futures::future::ready(result).boxed()
     }
 }
 
