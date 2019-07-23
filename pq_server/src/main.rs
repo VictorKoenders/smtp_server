@@ -32,8 +32,9 @@ struct Handler {
 }
 
 fn insert_mail(transaction: &mut Transaction, email: &Email) -> Result<Uuid, failure::Error> {
+    println!("Inserting email");
     const QUERY: &str = r#"INSERT INTO mail
-    (remote_addr, ssl, from)
+    ("remote_addr", "ssl", "from")
 VALUES
     ($1, $2, $3)
 RETURNING id"#;
@@ -53,8 +54,9 @@ RETURNING id"#;
 }
 
 fn insert_mail_to(transaction: &mut Transaction, id: Uuid, to: &str) -> Result<(), failure::Error> {
+    println!("Inserting email_to");
     const QUERY: &str = r#"INSERT INTO mail_to
-    (mail_id, to)
+    ("mail_id", "to")
 VALUES
     ($1, $2)"#;
     transaction.execute(QUERY, &[&id, &to])?;
@@ -67,8 +69,9 @@ fn insert_mail_part(
     parent_part_id: Option<Uuid>,
     part: &mailparse::ParsedMail,
 ) -> Result<(), failure::Error> {
+    println!("Inserting mail_part");
     const QUERY: &str = r#"INSERT INTO mail_part
-    (parent_part_id, mail_id, body)
+    ("mail_id", "parent_part_id", "body")
 VALUES
     ($1, $2, $3)
 RETURNING id
@@ -84,8 +87,9 @@ RETURNING id
     }
 
     for header in &part.headers {
+        println!("Inserting mail_header");
         const QUERY: &str = r#"INSERT INTO mail_header
-    (mail_part_id, mail_id, key, value)
+    ("mail_part_id", "mail_id", "key", "value")
 VALUES
     ($1, $2, $3, $4)
 "#;
@@ -148,7 +152,7 @@ fn ensure_table_exists(client: &mut Client) {
                     "UUID NOT NULL PRIMARY KEY DEFAULT (uuid_generate_v4())",
                 ),
                 ("remote_addr", "TEXT NOT NULL"),
-                ("ssl", "BIT NOT NULL"),
+                ("ssl", "BOOLEAN NOT NULL"),
                 ("from", "TEXT NOT NULL"),
                 ("received_on", "TIMESTAMPTZ NOT NULL DEFAULT (NOW())"),
             ],
