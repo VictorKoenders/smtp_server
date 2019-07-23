@@ -26,8 +26,9 @@ pub async fn run(
     mut collector: Collector,
     config: Config,
 ) -> Result<(), failure::Error> {
-    let mut state = State::default();
     let ip = crate::tcp_stream_helper::get_ip(&client);
+    let mut state = State::default();
+    let addr = client.peer_addr()?;
 
     log_and_send!(client, "220 {} ESMTP MailServer", config.host);
 
@@ -55,7 +56,7 @@ pub async fn run(
             }
             LineResponse::Done => {
                 log_and_send!(reader.reader, "250 Ok: Message received, over");
-                collector.collect(&mut state).await?;
+                collector.collect(&mut state, addr, false).await?;
                 state = Default::default();
             }
             LineResponse::Quit => {
