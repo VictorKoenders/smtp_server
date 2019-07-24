@@ -180,7 +180,8 @@ fn handle_mail(state: &mut State, mut parser: MessageParser, _config: &Config) -
             if word == "FROM" {
                 log::trace!("[MAIL] from {}", parser.remaining());
                 state.from = parser.remaining().to_owned();
-                "250 I'll let them know".into()
+
+                format!("250 Say hi to {} for me", parser.remaining()).into()
             } else {
                 "500 Expected FROM after MAIL".into()
             }
@@ -204,7 +205,7 @@ fn handle_recipient(
                 log::trace!("[MAIL] to {}", parser.remaining(),);
                 let recipient = parser.remaining();
                 state.recipient.push(recipient.to_owned());
-                format!("250 Say hi to {} for me", recipient).into()
+                "250 I'll let them know".into()
             } else {
                 "500 Expected TO after RCPT".into()
             }
