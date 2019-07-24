@@ -6,13 +6,15 @@ use std::task::{Context, Poll};
 
 pub struct LineReader<R: AsyncRead + Unpin> {
     pub reader: R,
+    max_size: usize,
     buffer: VecDeque<u8>,
 }
 
 impl<R: AsyncRead + Unpin> LineReader<R> {
-    pub fn new(reader: R) -> Self {
+    pub fn new(reader: R, max_size: usize) -> Self {
         Self {
             reader,
+            max_size,
             buffer: Default::default(),
         }
     }
@@ -51,6 +53,12 @@ impl<R: AsyncRead + Unpin> Stream for LineReader<R> {
                 }
                 Poll::Ready(Ok(l)) => {
                     this.buffer.extend(&buffer[..l]);
+                    if this.buffer.len() > this.max_size {
+                        return Poll::Ready(Some(Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "Too much data received"
+                        ))));
+                    }
                     did_read = true;
                 }
                 Poll::Ready(Err(e)) => {

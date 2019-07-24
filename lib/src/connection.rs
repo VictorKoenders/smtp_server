@@ -32,7 +32,7 @@ pub async fn run(
 
     log_and_send!(client, "220 {} ESMTP MailServer", config.host);
 
-    let mut reader = crate::line_reader::LineReader::new(client);
+    let mut reader = crate::line_reader::LineReader::new(client, config.max_size);
 
     while let Some(line) = reader.next().await {
         let line = line?;
@@ -193,7 +193,7 @@ fn handle_mail(state: &mut State, mut parser: MessageParser, _config: &Config) -
 fn handle_recipient(
     state: &mut State,
     mut parser: MessageParser,
-    _config: &Config,
+    config: &Config,
 ) -> LineResponse {
     if !state.ehlo_received {
         return "500 Aren't you supposed to introduce yourself? (Send EHLO)".into();
@@ -205,7 +205,12 @@ fn handle_recipient(
                 log::trace!("[MAIL] to {}", parser.remaining(),);
                 let recipient = parser.remaining();
                 state.recipient.push(recipient.to_owned());
-                "250 I'll let them know".into()
+                if state.recipient.iter().fold(0, |acc, r| acc + r.len()) > config.max_size {
+                    state.recipient.clear();
+                    "500 You're sending too much".into()
+                } else {
+                    "250 I'll let them know".into()
+                }
             } else {
                 "500 Expected TO after RCPT".into()
             }
@@ -270,7 +275,12 @@ impl State {
             } else {
                 self.body += msg;
                 self.body += "\r\n";
-                LineResponse::None
+                if self.body.bytes().len() >= config.max_size {
+                    self.body.clear();
+                    "500 Slow it down, you're sending too much".into()
+                } else {
+                    LineResponse::None
+                }
             }
         } else if msg.get(..8).map(|m| m.to_ascii_uppercase()) == Some(String::from("STARTTLS"))
             && config.features.contains(&ConfigFeature::Tls)
