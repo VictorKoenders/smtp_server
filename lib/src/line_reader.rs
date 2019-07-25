@@ -56,7 +56,7 @@ impl<R: AsyncRead + Unpin> Stream for LineReader<R> {
                     if this.buffer.len() > this.max_size {
                         return Poll::Ready(Some(Err(std::io::Error::new(
                             std::io::ErrorKind::Interrupted,
-                            "Too much data received"
+                            "Too much data received",
                         ))));
                     }
                     did_read = true;

@@ -129,7 +129,7 @@ fn try_run_transaction(client: &mut Client, email: Email) -> Result<bool, failur
 
 impl MailHandler for Handler {
     fn handle_mail(&mut self, email: Email) -> bool {
-        match try_run_transaction(&mut self.client, email){
+        match try_run_transaction(&mut self.client, email) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("Could not handle DB transaction: {:?}", e);

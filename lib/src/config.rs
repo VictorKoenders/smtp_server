@@ -6,17 +6,17 @@ use failure::{ResultExt, format_err};*/
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    pub host: String,
-    pub max_size: usize,
+    pub(crate) host: String,
+    pub(crate) max_size: usize,
     // pub tls_acceptor: Option<tokio_tls::TlsAcceptor>,
-    pub features: Vec<ConfigFeature>,
+    pub(crate) features: Vec<ConfigFeature>,
 }
 
 impl Config {
     pub fn build(host: impl Into<String>) -> ConfigBuilder {
         ConfigBuilder {
             host: host.into(),
-            max_size: 4*1024*1024, // 4MB
+            max_size: 4 * 1024 * 1024, // 4MB
             ..Default::default()
         }
     }
@@ -79,7 +79,6 @@ impl ConfigBuilder {
         Config {
             host: self.host,
             max_size: self.max_size,
-
             // tls_acceptor: self.tls_acceptor,
             features: self.features,
         }

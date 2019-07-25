@@ -2,7 +2,7 @@ use crate::collector::Collector;
 use crate::config::{Config, ConfigFeature};
 use crate::message_parser::MessageParser;
 use futures::io::AsyncWriteExt;
-use futures::stream::StreamExt;
+use futures::{FutureExt, StreamExt};
 use runtime::net::TcpStream;
 use std::borrow::Cow;
 
@@ -37,7 +37,7 @@ pub async fn run(
     while let Some(line) = reader.next().await {
         let line = line?;
         log::trace!("[{}]  IN: {}", ip, line);
-        match state.message_received(&line, &config) {
+        match state.message_received(&line, &config).await {
             LineResponse::None => {}
             LineResponse::Upgrade => {
                 log_and_send!(reader.reader, "500 Not implemented");
@@ -130,7 +130,8 @@ pub struct State {
     is_reading_body: bool,
 }
 
-type StateFn = &'static (dyn Sync + Fn(&mut State, MessageParser, &Config) -> LineResponse);
+type Future<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
+type StateFn = &'static (dyn Sync + Fn(&mut State, MessageParser, &Config) -> Future<LineResponse>);
 
 lazy_static::lazy_static! {
     static ref SMTP_COMMANDS: std::collections::HashMap<&'static [u8; 4], StateFn> = {
@@ -151,122 +152,169 @@ lazy_static::lazy_static! {
     };
 }
 
-fn handle_ehlo(state: &mut State, _parser: MessageParser, config: &Config) -> LineResponse {
+fn handle_ehlo(state: &mut State, _parser: MessageParser, config: &Config) -> Future<LineResponse> {
     state.ehlo_received = true;
-    let mut cmds_to_send: Vec<Cow<'static, str>> = vec!["localhost, I'm glad to meet you".into()];
+    let mut cmds_to_send: Vec<Cow<'static, str>> = Vec::new();
+    cmds_to_send.push("localhost, I'm glad to meet you".into());
+    cmds_to_send.push(format!("SIZE {}", config.max_size).into());
+
     for feature in &config.features {
         if let Some(tag) = feature.as_ehlo_tag() {
             cmds_to_send.push(tag);
         }
     }
 
-    let last_index = cmds_to_send.len() - 1;
-    let responses = cmds_to_send
-        .into_iter()
-        .enumerate()
-        .map(|(index, c)| format!("250{}{}", if index == last_index { " " } else { "-" }, c).into())
-        .collect();
+    let mut responses = Vec::with_capacity(cmds_to_send.len());
+    for cmd in cmds_to_send.iter().take(cmds_to_send.len() - 1) {
+        responses.push(format!("250-{}", cmd).into());
+    }
+    // There are always items in cmds_to_send, so this .last().unwrap() is safe
+    responses.push(format!("250 {}", cmds_to_send.last().unwrap()).into());
 
-    LineResponse::ReplyWithMultiple(responses)
+    futures::future::ready(LineResponse::ReplyWithMultiple(responses)).boxed()
 }
 
-fn handle_mail(state: &mut State, mut parser: MessageParser, _config: &Config) -> LineResponse {
-    if !state.ehlo_received {
-        return "500 Aren't you supposed to introduce yourself? (Send EHLO)".into();
-    }
-    match parser.consume_word_until(COLON) {
-        Some(word) => {
-            let word = word.to_ascii_uppercase();
-            if word == "FROM" {
-                log::trace!("[MAIL] from {}", parser.remaining());
-                state.from = parser.remaining().to_owned();
+fn handle_mail(
+    state: &mut State,
+    mut parser: MessageParser,
+    _config: &Config,
+) -> Future<LineResponse> {
+    futures::future::ready(if !state.ehlo_received {
+        "500 Aren't you supposed to introduce yourself? (Send EHLO)".into()
+    } else {
+        match parser.consume_word_until(COLON) {
+            Some(word) => {
+                let word = word.to_ascii_uppercase();
+                if word == "FROM" {
+                    log::trace!("[MAIL] from {}", parser.remaining());
+                    state.from = parser.remaining().to_owned();
 
-                format!("250 Say hi to {} for me", parser.remaining()).into()
-            } else {
-                "500 Expected FROM after MAIL".into()
+                    format!("250 Say hi to {} for me", parser.remaining()).into()
+                } else {
+                    "500 Expected FROM after MAIL".into()
+                }
             }
+            None => "500 Expected FROM after MAIL".into(),
         }
-        None => "500 Expected FROM after MAIL".into(),
-    }
+    })
+    .boxed()
 }
 
 fn handle_recipient(
     state: &mut State,
     mut parser: MessageParser,
     config: &Config,
-) -> LineResponse {
-    if !state.ehlo_received {
-        return "500 Aren't you supposed to introduce yourself? (Send EHLO)".into();
-    }
-    match parser.consume_word_until(COLON) {
-        Some(word) => {
-            let word = word.to_ascii_uppercase();
-            if word == "TO" {
-                log::trace!("[MAIL] to {}", parser.remaining(),);
-                let recipient = parser.remaining();
-                state.recipient.push(recipient.to_owned());
-                if state.recipient.iter().fold(0, |acc, r| acc + r.len()) > config.max_size {
-                    state.recipient.clear();
-                    "500 You're sending too much".into()
+) -> Future<LineResponse> {
+    futures::future::ready(if !state.ehlo_received {
+        "500 Aren't you supposed to introduce yourself? (Send EHLO)".into()
+    } else {
+        match parser.consume_word_until(COLON) {
+            Some(word) => {
+                let word = word.to_ascii_uppercase();
+                if word == "TO" {
+                    log::trace!("[MAIL] to {}", parser.remaining(),);
+                    let recipient = parser.remaining();
+                    state.recipient.push(recipient.to_owned());
+                    if state.recipient.iter().fold(0, |acc, r| acc + r.len()) > config.max_size {
+                        state.recipient.clear();
+                        "500 You're sending too much".into()
+                    } else {
+                        "250 I'll let them know".into()
+                    }
                 } else {
-                    "250 I'll let them know".into()
+                    "500 Expected TO after RCPT".into()
                 }
-            } else {
-                "500 Expected TO after RCPT".into()
             }
+            None => "500 Expected TO after RCPT".into(),
         }
-        None => "500 Expected TO after RCPT".into(),
-    }
+    })
+    .boxed()
 }
 
-fn handle_size(_state: &mut State, mut _parser: MessageParser, _config: &Config) -> LineResponse {
+fn handle_size(
+    _state: &mut State,
+    mut _parser: MessageParser,
+    _config: &Config,
+) -> Future<LineResponse> {
     log::error!("TODO: SIZE {}", _parser.remaining());
-    "500 Not implemented".into()
+    futures::future::ready("500 Not implemented".into()).boxed()
 }
 
-fn handle_data(state: &mut State, mut _parser: MessageParser, _config: &Config) -> LineResponse {
+fn handle_data(
+    state: &mut State,
+    mut _parser: MessageParser,
+    _config: &Config,
+) -> Future<LineResponse> {
     state.is_reading_body = true;
-    "354 Go on, I'm listening... (end with \\r\\n.\\r\\n)".into()
+    futures::future::ready("354 Go on, I'm listening... (end with \\r\\n.\\r\\n)".into()).boxed()
 }
 
-fn handle_verify(_state: &mut State, mut _parser: MessageParser, _config: &Config) -> LineResponse {
+fn handle_verify(
+    _state: &mut State,
+    mut _parser: MessageParser,
+    _config: &Config,
+) -> Future<LineResponse> {
     log::error!("TODO: VRFY {}", _parser.remaining());
-    "500 Not implemented".into()
+    futures::future::ready("500 Not implemented".into()).boxed()
 }
 
-fn handle_turn(_state: &mut State, mut _parser: MessageParser, _config: &Config) -> LineResponse {
+fn handle_turn(
+    _state: &mut State,
+    mut _parser: MessageParser,
+    _config: &Config,
+) -> Future<LineResponse> {
     log::error!("TODO: TURN {}", _parser.remaining());
-    "500 Not implemented".into()
+    futures::future::ready("500 Not implemented".into()).boxed()
 }
 
-fn handle_auth(_state: &mut State, mut _parser: MessageParser, _config: &Config) -> LineResponse {
+fn handle_auth(
+    _state: &mut State,
+    mut _parser: MessageParser,
+    _config: &Config,
+) -> Future<LineResponse> {
     log::error!("TODO: AUTH {}", _parser.remaining());
-    "500 Not implemented".into()
+    futures::future::ready("500 Not implemented".into()).boxed()
 }
 
-fn handle_reset(state: &mut State, mut _parser: MessageParser, _config: &Config) -> LineResponse {
+fn handle_reset(
+    state: &mut State,
+    mut _parser: MessageParser,
+    _config: &Config,
+) -> Future<LineResponse> {
     *state = Default::default();
-    "200 It's all gone".into()
+    futures::future::ready("200 It's all gone".into()).boxed()
 }
 
-fn handle_expn(_state: &mut State, mut _parser: MessageParser, _config: &Config) -> LineResponse {
+fn handle_expn(
+    _state: &mut State,
+    mut _parser: MessageParser,
+    _config: &Config,
+) -> Future<LineResponse> {
     log::error!("TODO: EXPN {}", _parser.remaining());
-    "500 Not implemented".into()
+    futures::future::ready("500 Not implemented".into()).boxed()
 }
 
-fn handle_help(_state: &mut State, mut _parser: MessageParser, _config: &Config) -> LineResponse {
+fn handle_help(
+    _state: &mut State,
+    mut _parser: MessageParser,
+    _config: &Config,
+) -> Future<LineResponse> {
     log::error!("TODO: HELP {}", _parser.remaining());
-    "500 Not implemented".into()
+    futures::future::ready("500 Not implemented".into()).boxed()
 }
 
-fn handle_quit(_state: &mut State, mut _parser: MessageParser, _config: &Config) -> LineResponse {
-    LineResponse::Quit
+fn handle_quit(
+    _state: &mut State,
+    mut _parser: MessageParser,
+    _config: &Config,
+) -> Future<LineResponse> {
+    futures::future::ready(LineResponse::Quit).boxed()
 }
 
 const COLON: u8 = b':';
 
 impl State {
-    fn message_received(&mut self, msg: &str, config: &Config) -> LineResponse {
+    async fn message_received(&mut self, msg: &str, config: &Config) -> LineResponse {
         if self.is_reading_body {
             log::trace!("[BODY] {}", msg);
             if msg == "." {
@@ -291,7 +339,7 @@ impl State {
             let bytes: &[u8; 4] = arrayref::array_ref![upper_case.as_bytes(), 0, 4];
             if let Some(cmd) = SMTP_COMMANDS.get(bytes) {
                 let parser = MessageParser::new(msg[4..].trim());
-                cmd(self, parser, config)
+                cmd(self, parser, config).await
             } else {
                 log::error!("Client send an unknown command: {:?}", &msg[..]);
                 "500 Unknown command".into()

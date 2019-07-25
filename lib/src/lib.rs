@@ -29,10 +29,16 @@ type Future<T> = Pin<Box<dyn std::future::Future<Output = T> + Send>>;
 
 pub trait MailHandler: Send {
     fn handle_mail(&mut self, mail: Email) -> bool;
+    fn validate_hostname(&mut self, _hostname: &str) -> bool {
+        true
+    }
 }
 
 pub trait MailHandlerAsync: Send {
     fn handle_mail_async(&mut self, mail: Email) -> Future<bool>;
+    fn validate_hostname(&mut self, _hostname: &str) -> Future<bool> {
+        futures::future::ready(true).boxed()
+    }
 }
 
 impl<T> MailHandlerAsync for T
@@ -41,6 +47,11 @@ where
 {
     fn handle_mail_async(&mut self, mail: Email) -> Future<bool> {
         let result = self.handle_mail(mail);
+        futures::future::ready(result).boxed()
+    }
+
+    fn validate_hostname(&mut self, hostname: &str) -> Future<bool> {
+        let result = self.validate_hostname(hostname);
         futures::future::ready(result).boxed()
     }
 }

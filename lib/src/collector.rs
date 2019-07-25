@@ -83,7 +83,7 @@ impl Collector {
                 body,
                 peer_addr,
                 used_ssl: is_ssl,
-                returner: sender
+                returner: sender,
             })
             .await?;
         let result = receiver.await?;
