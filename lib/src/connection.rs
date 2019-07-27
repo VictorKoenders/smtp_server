@@ -78,7 +78,7 @@ pub async fn run(
     let addr = client.peer_addr()?;
 
     let mut reader = crate::line_reader::LineReader::new(client, config.max_size);
-    log_and_send!(reader, "220 {} ESMTP MailServer", config.host.as_str());
+    log_and_send!(reader, addr, "220 {} ESMTP MailServer", config.host.as_str());
 
     while let Some(line) = reader.next().await {
         let line = line?;

@@ -1,17 +1,23 @@
 #![feature(async_await)]
 
-const CONNECTION_STRING: &str = "postgres://trangar:Development@localhost/mail";
-
 use fallible_iterator::FallibleIterator;
 use postgres::{Client, NoTls, Transaction};
 use smtp_server::{Config, Email, MailHandler};
 use std::fmt::Write;
 use uuid::Uuid;
 
+fn get_env(name: &str) -> String {
+    match std::env::var(name) {
+        Ok(v) => v,
+        Err(e) => panic!("Could not find environment variable {:?}: {:?}", name, e),
+    }
+}
 #[runtime::main]
 async fn main() {
+    let _ = dotenv::dotenv();
+    let connection_string = get_env("DATABASE_URL");
     let mut client =
-        Client::connect(CONNECTION_STRING, NoTls).expect("Could not connect to server");
+        Client::connect(&connection_string, NoTls).expect("Could not connect to server");
     ensure_table_exists(&mut client);
 
     env_logger::init();

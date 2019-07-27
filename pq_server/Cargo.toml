@@ -5,14 +5,15 @@ name = "pq_server"
 version = "0.1.0"
 
 [dependencies]
-env_logger = "*"
+env_logger = "0.6"
 fallible-iterator = "0.2"
 postgres = { version = "0.16.0-rc.2", features = ["with-uuid-0_7"] }
 futures-preview = "0.3.0-alpha.17"
 runtime = "0.3.0-alpha.6"
-mailparse = "*"
+mailparse = "0.8"
 uuid = "0.7"
-failure = "*"
+failure = "0.1"
+dotenv = "0.14"
 
 [dependencies.smtp_server]
 path = "../lib"
