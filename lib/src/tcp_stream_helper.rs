@@ -3,17 +3,15 @@ use std::borrow::Cow;
 
 #[macro_export]
 macro_rules! log_and_send {
-    ($client:expr, $msg:expr) => {
+    ($client:expr, $addr:expr, $msg:expr) => {
         let str = $msg;
-        let ip = crate::tcp_stream_helper::get_ip(&$client);
-        log::trace!("[{}] OUT: {}", ip, str);
-        $client.write_all(str.as_bytes()).await?;
-        $client.write_all(b"\r\n").await?;
+        log::trace!("[{}] OUT: {}", $addr, str);
+        $client.send(str.as_bytes().to_vec()).await?;
+        $client.send(b"\r\n".to_vec()).await?;
     };
-    ($client:expr, $msg:expr $(, $arg:expr)*) => {
+    ($client:expr, $addr:expr, $msg:expr $(, $arg:expr)*) => {
         let str: String = format!($msg $(, $arg)*);
-        let ip = crate::tcp_stream_helper::get_ip(&$client);
-        log::trace!("[{}] OUT: {}", ip, str);
+        log::trace!("[{}] OUT: {}", $addr, str);
         $client.write_all(str.as_bytes()).await?;
         $client.write_all(b"\r\n").await?;
     }

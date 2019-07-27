@@ -1,10 +1,10 @@
 use crate::collector::Collector;
 use crate::config::{Config, ConfigFeature};
 use crate::message_parser::MessageParser;
-use futures::io::AsyncWriteExt;
-use futures::{FutureExt, StreamExt};
+use futures::{FutureExt, Sink, SinkExt, StreamExt};
 use runtime::net::TcpStream;
 use std::borrow::Cow;
+use std::net::SocketAddr;
 
 /*
 pub fn spawn_tls(client: TcpStream, collector: Collector, config: Config) {
@@ -21,8 +21,55 @@ pub fn spawn_tls(client: TcpStream, collector: Collector, config: Config) {
 }
 */
 
+type DoBreak = bool;
+
+async fn handle_line<R>(
+    line: &str,
+    state: &mut State,
+    config: &Config,
+    reader: &mut R,
+    collector: &mut Collector,
+    peer_addr: SocketAddr,
+) -> Result<DoBreak, failure::Error>
+where
+    R: Sink<Vec<u8>> + Unpin,
+    <R as Sink<Vec<u8>>>::Error: 'static + Sync + Send + std::error::Error,
+{
+    match state.message_received(&line, &config).await {
+        LineResponse::None => {}
+        LineResponse::Upgrade => {
+            log_and_send!(reader, peer_addr, "500 Not implemented");
+            /*log::debug!("Upgrading request");
+            client.write_all(b"220 Go ahead").await?;
+            return run_tls(client, collector, state, config).await;
+            */
+        }
+        LineResponse::ReplyWith(msg) => {
+            log_and_send!(reader, peer_addr, msg);
+        }
+        LineResponse::ReplyWithMultiple(msg) => {
+            for msg in msg {
+                log_and_send!(reader, peer_addr, msg);
+            }
+        }
+        LineResponse::Done => {
+            let collected_ok = collector.collect(state, peer_addr, false).await?;
+            if collected_ok {
+                log_and_send!(reader, peer_addr, "250 Ok: Message received, over");
+            } else {
+                log_and_send!(reader, peer_addr, "500 Internal server error");
+            }
+            *state = Default::default();
+        }
+        LineResponse::Quit => {
+            log_and_send!(reader, peer_addr, "200 Come back soon!");
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 pub async fn run(
-    mut client: TcpStream,
+    client: TcpStream,
     mut collector: Collector,
     config: Config,
 ) -> Result<(), failure::Error> {
@@ -30,43 +77,23 @@ pub async fn run(
     let mut state = State::default();
     let addr = client.peer_addr()?;
 
-    log_and_send!(client, "220 {} ESMTP MailServer", config.host);
-
     let mut reader = crate::line_reader::LineReader::new(client, config.max_size);
+    log_and_send!(reader, "220 {} ESMTP MailServer", config.host.as_str());
 
     while let Some(line) = reader.next().await {
         let line = line?;
         log::trace!("[{}]  IN: {}", ip, line);
-        match state.message_received(&line, &config).await {
-            LineResponse::None => {}
-            LineResponse::Upgrade => {
-                log_and_send!(reader.reader, "500 Not implemented");
-                /*log::debug!("Upgrading request");
-                client.write_all(b"220 Go ahead").await?;
-                return run_tls(client, collector, state, config).await;
-                */
-            }
-            LineResponse::ReplyWith(msg) => {
-                log_and_send!(reader.reader, msg);
-            }
-            LineResponse::ReplyWithMultiple(msg) => {
-                for msg in msg {
-                    log_and_send!(reader.reader, msg);
-                }
-            }
-            LineResponse::Done => {
-                let collected_ok = collector.collect(&mut state, addr, false).await?;
-                if collected_ok {
-                    log_and_send!(reader.reader, "250 Ok: Message received, over");
-                } else {
-                    log_and_send!(reader.reader, "500 Internal server error");
-                }
-                state = Default::default();
-            }
-            LineResponse::Quit => {
-                log_and_send!(reader.reader, "200 Come back soon!");
-                break;
-            }
+        let do_break = handle_line(
+            &line,
+            &mut state,
+            &config,
+            &mut reader,
+            &mut collector,
+            addr,
+        )
+        .await?;
+        if do_break {
+            break;
         }
     }
     Ok(())
