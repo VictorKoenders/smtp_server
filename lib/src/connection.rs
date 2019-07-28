@@ -73,16 +73,20 @@ pub async fn run(
     mut collector: Collector,
     config: Config,
 ) -> Result<(), failure::Error> {
-    let ip = crate::tcp_stream_helper::get_ip(&client);
     let mut state = State::default();
     let addr = client.peer_addr()?;
 
     let mut reader = crate::line_reader::LineReader::new(client, config.max_size);
-    log_and_send!(reader, addr, "220 {} ESMTP MailServer", config.host.as_str());
+    log_and_send!(
+        reader,
+        addr,
+        "220 {} ESMTP MailServer",
+        config.host.as_str()
+    );
 
     while let Some(line) = reader.next().await {
         let line = line?;
-        log::trace!("[{}]  IN: {}", ip, line);
+        log::trace!("[{}]  IN: {}", addr, line);
         let do_break = handle_line(
             &line,
             &mut state,

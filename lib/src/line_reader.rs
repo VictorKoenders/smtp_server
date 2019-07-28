@@ -49,7 +49,6 @@ impl<R: AsyncRead + AsyncWrite + Unpin> LineReader<R> {
             written += ready!(inner.as_mut().poll_write(cx, slices.1))?;
             buffer.drain(..written);
         }
-        println!("pull_flush_buffer done");
         Poll::Ready(Ok(()))
     }
 }

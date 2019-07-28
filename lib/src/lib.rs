@@ -84,7 +84,7 @@ async fn spawn_tcp(config: Config, collector: Collector) -> Result<(), failure::
             let config = config.clone();
             let collector = collector.clone();
             runtime::spawn(async move {
-                let peer_addr = client.peer_addr();
+                let peer_addr = client.peer_addr()?;
                 let local_port = client.local_addr().map(|a| a.port()).unwrap_or(0);
                 log::info!("Received client {:?} on port {}", peer_addr, local_port);
                 if let Err(e) =
