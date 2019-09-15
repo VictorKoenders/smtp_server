@@ -36,13 +36,10 @@ impl State {
             (State::Initial, Command::Ehlo { .. }) => {
                 (State::EhloReceived, Flow::Reply("Hello!".into()))
             }
-            (State::EhloReceived, Command::MailFrom { address, headers }) => {
-                println!("MAIL FROM: {} ({:?})", address, headers);
-                (
-                    State::SenderReceived { sender: address },
-                    Flow::Reply("Tell them I said hi".into()),
-                )
-            }
+            (State::EhloReceived, Command::MailFrom { address, .. }) => (
+                State::SenderReceived { sender: address },
+                Flow::Reply("Tell them I said hi".into()),
+            ),
             (State::SenderReceived { sender }, Command::RecipientTo { address }) => (
                 State::RecipientReceived {
                     sender,
