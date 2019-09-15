@@ -5,9 +5,10 @@ mod connection;
 mod flow;
 mod smtp;
 
-use self::config::{Capability, Config};
+pub use self::config::{Capability, Config};
 use self::connection::Connection;
-use self::flow::Flow;
+pub use self::flow::Flow;
+
 use async_trait::async_trait;
 use bytes::BytesMut;
 use tokio::net::{TcpListener, TcpStream};
