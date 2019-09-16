@@ -6,24 +6,29 @@ use crate::smtp::{
     Command as SmtpCommand, CommandParserError as SmtpCommandParserError, State as SmtpState,
     StateError as SmtpStateError,
 };
-use crate::Config;
+use crate::{Config, Email, Handler};
 
 pub struct Connection {
     codec: LinesCodec,
     smtp: SmtpState,
     config: Config,
+    handler: Box<dyn Handler>,
 }
 
 impl Connection {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, handler: Box<dyn Handler>) -> Self {
         Self {
             codec: LinesCodec::new_with_max_length(config.max_receive_length),
             smtp: SmtpState::Initial,
             config,
+            handler,
         }
     }
 
-    pub fn data_received(&mut self, bytes: &mut BytesMut) -> Result<Option<Flow>, ClientError> {
+    pub async fn data_received(
+        &mut self,
+        bytes: &mut BytesMut,
+    ) -> Result<Option<Flow>, ClientError> {
         if let SmtpState::ReceivingBody {
             body,
             recipient,
@@ -37,14 +42,15 @@ impl Connection {
                 Err(ClientError::MaxLength)
             } else {
                 Ok(if body.ends_with(b"\r\n.\r\n") {
-                    println!("Received email from {} to {}", sender, recipient);
-                    if let Ok(body) = std::str::from_utf8(&body) {
-                        println!("{}", body);
+                    let email =
+                        Email::parse(sender, recipient, body).map_err(ClientError::EmailParse)?;
+                    Some(if let Err(e) = self.handler.save_email(&email).await {
+                        self.smtp = SmtpState::Done;
+                        Flow::Reply(Flow::status_err(), e.into())
                     } else {
-                        println!("{:?}", body);
-                    }
-                    self.smtp = SmtpState::Done;
-                    Some(Flow::Reply("Email received, over and out!".into()))
+                        self.smtp = SmtpState::Done;
+                        Flow::Reply(Flow::status_ok(), "Email received, over and out!".into())
+                    })
                 } else {
                     None
                 })
@@ -60,7 +66,7 @@ impl Connection {
             let command = SmtpCommand::parse(&line).map_err(ClientError::InvalidSmtpCommand)?;
             let flow = self
                 .smtp
-                .handle_command(command)
+                .handle_command(command, &self.config)
                 .map_err(ClientError::StateError)?;
 
             last_flow_result = Some(flow)
@@ -75,4 +81,5 @@ pub enum ClientError {
     InvalidSmtpCommand(SmtpCommandParserError),
     StateError(SmtpStateError),
     LinesCodecError(LinesCodecError),
+    EmailParse(mailparse::MailParseError),
 }

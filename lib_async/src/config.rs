@@ -1,10 +1,80 @@
+use native_tls::Identity;
+use std::borrow::Cow;
+use std::sync::Arc;
+
 #[derive(Clone)]
 pub struct Config {
-    pub max_receive_length: usize,
-    pub hostname: String,
-    pub mail_server_name: String,
+    pub(crate) max_receive_length: usize,
+    pub(crate) hostname: String,
+    pub(crate) mail_server_name: String,
+    pub(crate) identity: Option<Arc<Identity>>,
 
-    pub capabilities: Vec<Capability>,
+    pub(crate) capabilities: Vec<Capability>,
+}
+
+pub struct ConfigBuilder {
+    config: Config,
+}
+
+impl Default for ConfigBuilder {
+    fn default() -> ConfigBuilder {
+        ConfigBuilder {
+            config: Config {
+                max_receive_length: usize::max_value(),
+                hostname: String::from("smtp.example.com"),
+                mail_server_name: String::from("Rusty SMTP server"),
+                identity: None,
+                capabilities: vec![Capability::SmtpUtf8],
+            },
+        }
+    }
+}
+
+impl ConfigBuilder {
+    pub fn with_pkcs12_certificate(
+        mut self,
+        file: impl AsRef<std::path::Path>,
+        password: impl AsRef<str>,
+    ) -> Result<ConfigBuilder, ConfigBuilderTlsError> {
+        use std::io::Read;
+        let mut file = std::fs::File::open(file).map_err(ConfigBuilderTlsError::Io)?;
+        let mut identity = vec![];
+        file.read_to_end(&mut identity)
+            .map_err(ConfigBuilderTlsError::Io)?;
+
+        let identity = Identity::from_pkcs12(&identity, password.as_ref())
+            .map_err(ConfigBuilderTlsError::NativeTls)?;
+
+        self.config.identity = Some(Arc::new(identity));
+        self.config.capabilities.push(Capability::StartTls);
+
+        Ok(self)
+    }
+
+    pub fn with_hostname(mut self, hostname: impl Into<String>) -> Self {
+        self.config.hostname = hostname.into();
+        self
+    }
+
+    pub fn with_server_name(mut self, mail_server_name: impl Into<String>) -> Self {
+        self.config.mail_server_name = mail_server_name.into();
+        self
+    }
+
+    pub fn with_max_size(mut self, max_size: usize) -> Self {
+        self.config.max_receive_length = max_size;
+        self
+    }
+
+    pub fn build(self) -> Config {
+        self.config
+    }
+}
+
+#[derive(Debug)]
+pub enum ConfigBuilderTlsError {
+    Io(std::io::Error),
+    NativeTls(native_tls::Error),
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -69,4 +139,15 @@ pub enum Capability {
     /// Currently not implemented
     #[deprecated]
     Pipelining,
+}
+
+impl Capability {
+    pub(crate) fn to_cow_str(&self, config: &Config) -> Cow<'static, str> {
+        match self {
+            Capability::Size => format!("SIZE {}", config.max_receive_length).into(),
+            Capability::StartTls => "STARTLS".into(),
+            Capability::SmtpUtf8 => "SMTPUTF8".into(),
+            _ => unimplemented!(),
+        }
+    }
 }

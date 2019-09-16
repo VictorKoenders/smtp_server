@@ -3,5 +3,5 @@
 echo "Subject: Terminal Email Send
 
 Email Content Line 1
-Email Content Line 2" | sendmail -v user@localhost
+Email Content Line 2" | sendmail -v target@localhost
 

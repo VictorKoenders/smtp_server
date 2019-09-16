@@ -3,38 +3,34 @@
 mod config;
 mod connection;
 mod flow;
+mod handler;
 mod smtp;
 
-pub use self::config::{Capability, Config};
+pub use self::config::{Capability, Config, ConfigBuilder};
 use self::connection::Connection;
 pub use self::flow::Flow;
+pub use self::handler::{Email, Handler};
 
-use async_trait::async_trait;
 use bytes::BytesMut;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
 
-pub struct SmtpServer<H: Handler> {
+pub struct SmtpServer {
     listener: TcpListener,
-    handler: H,
+    handler: Box<dyn Handler>,
     config: Config,
 }
 
-#[async_trait]
-pub trait Handler: Send + Sync + Clone + 'static {
-    async fn validate_address(&self, email_address: &str) -> bool;
-}
-
-impl<H: Handler> SmtpServer<H> {
+impl SmtpServer {
     pub async fn create<A: tokio_net::ToSocketAddrs>(
         addrs: A,
-        handler: H,
+        handler: impl Handler,
         config: Config,
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind(addrs).await?;
         Ok(SmtpServer {
             listener,
-            handler,
+            handler: Box::new(handler),
             config,
         })
     }
@@ -42,19 +38,13 @@ impl<H: Handler> SmtpServer<H> {
     pub async fn run(mut self) -> std::io::Result<()> {
         loop {
             let (socket, addr) = self.listener.accept().await?;
-            let handler = self.handler.clone();
-            let config = self.config.clone();
-            tokio::spawn(async move { process(socket, addr, config, handler).await });
+            let state = Connection::new(self.config.clone(), self.handler.clone_box());
+            tokio::spawn(async move { process(socket, addr, state).await });
         }
     }
 }
 
-async fn process<H: Handler>(
-    mut socket: TcpStream,
-    addr: std::net::SocketAddr,
-    config: Config,
-    _handler: H,
-) {
+async fn process(mut socket: TcpStream, addr: std::net::SocketAddr, mut state: Connection) {
     println!("[{}] Connected", addr);
     if let Err(e) = socket
         .write_all(b"220 smtp.server.com Simple Mail Transfer Service Ready\r\n")
@@ -63,7 +53,6 @@ async fn process<H: Handler>(
         eprintln!("Can not send initial message to the client: {:?}", e);
         return;
     }
-    let mut state = Connection::new(config.clone());
     let mut bytes = BytesMut::new();
     'outer: loop {
         let mut buffer = [0u8; 1024];
@@ -81,22 +70,32 @@ async fn process<H: Handler>(
             }
         }
 
-        match state.data_received(&mut bytes) {
-            Ok(Some(Flow::Reply(msg))) => {
-                let string = format!("220 {}\r\n", msg);
-                if let Err(e) = socket.write_all(string.as_bytes()).await {
-                    eprintln!("[{}] Could not send message to client: {:?}", addr, e);
-                    break 'outer;
-                }
-            }
-            Ok(Some(Flow::ReplyWithCode(code, msg))) => {
+        match state.data_received(&mut bytes).await {
+            Ok(Some(Flow::Reply(code, msg))) => {
                 let string = format!("{} {}\r\n", code, msg);
                 if let Err(e) = socket.write_all(string.as_bytes()).await {
                     eprintln!("[{}] Could not send message to client: {:?}", addr, e);
                     break 'outer;
                 }
             }
-            Ok(Some(Flow::Silent)) | Ok(None) => {}
+            Ok(Some(Flow::ReplyMultiline(code, lines))) => {
+                for (index, line) in lines.iter().enumerate() {
+                    let is_last = index + 1 == lines.len();
+
+                    for msg in &[
+                        code.to_string().as_str(),
+                        if is_last { " " } else { "-" },
+                        line,
+                        "\r\n",
+                    ] {
+                        if let Err(e) = socket.write_all(msg.as_bytes()).await {
+                            eprintln!("[{}] Could not send message to client: {:?}", addr, e);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            Ok(None) => {}
             Ok(Some(Flow::Quit)) => {
                 println!("[{}] Client quit", addr);
                 break 'outer;
