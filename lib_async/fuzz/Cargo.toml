@@ -1,0 +1,28 @@
+
+[package]
+name = "lib_async-fuzz"
+version = "0.0.1"
+edition = "2018"
+authors = ["Automatically generated"]
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+async-trait = "0.1"
+bytes = "0.4"
+
+[dependencies.lib_async]
+path = ".."
+
+[dependencies.libfuzzer-sys]
+git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_target_1"
+path = "fuzz_targets/fuzz_target_1.rs"

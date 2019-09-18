@@ -14,6 +14,7 @@ pub enum Command {
     Data,
     Reset,
     Quit,
+    StartTls,
     // Verify {
     //     address: String,
     // },
@@ -22,18 +23,29 @@ pub enum Command {
 
 impl Command {
     pub fn parse(line: &str) -> Result<Command, ParserError> {
-        match line[..4].to_ascii_lowercase().as_str() {
+        match line
+            .get(..4)
+            .ok_or(ParserError::InputTooShort)?
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "ehlo" => {
-                let host = line[4..].trim().to_owned();
+                let host = line.get(4..).unwrap_or("").trim().to_owned();
                 Ok(Command::Ehlo { host })
             }
             "mail" => {
-                if line[5..9].to_ascii_lowercase().as_str() != "from" {
+                if line
+                    .get(5..9)
+                    .ok_or(ParserError::InputTooShort)?
+                    .to_ascii_lowercase()
+                    .as_str()
+                    != "from"
+                {
                     Err(ParserError::InvalidSmtpCommand(
                         "MAIL FROM command is missing required fragment FROM",
                     ))
                 } else {
-                    let remaining = line[10..].trim();
+                    let remaining = line.get(10..).ok_or(ParserError::InputTooShort)?.trim();
                     let mut parts = remaining.split(' ');
                     let address =
                         trim_brackets(parts.next().ok_or(ParserError::MissingFromAddress)?)
@@ -52,18 +64,33 @@ impl Command {
                 }
             }
             "rcpt" => {
-                if line[5..7].to_ascii_lowercase().as_str() != "to" {
+                if line
+                    .get(5..7)
+                    .ok_or(ParserError::InputTooShort)?
+                    .to_ascii_lowercase()
+                    .as_str()
+                    != "to"
+                {
                     Err(ParserError::InvalidSmtpCommand(
                         "RCPT TO command is missing required fragment TO",
                     ))
                 } else {
-                    let address = trim_brackets(line[8..].trim()).to_owned();
+                    let address =
+                        trim_brackets(line.get(8..).ok_or(ParserError::InputTooShort)?.trim())
+                            .to_owned();
                     Ok(Command::RecipientTo { address })
                 }
             }
             "data" => Ok(Command::Data),
             "rset" => Ok(Command::Reset),
             "quit" => Ok(Command::Quit),
+            "star" => {
+                if line.trim().to_ascii_lowercase() == "starttls" {
+                    Ok(Command::StartTls)
+                } else {
+                    Err(ParserError::UnknownSmtpCommand)
+                }
+            }
             _ => {
                 println!("Unknown SMTP command: {:?}", line);
                 Err(ParserError::UnknownSmtpCommand)
@@ -74,6 +101,7 @@ impl Command {
 
 fn trim_brackets(s: &str) -> &str {
     if s.starts_with('<') && s.ends_with('>') {
+        #[allow(clippy::indexing_slicing)] // Safe because we checked that the two characters exist
         &s[1..s.len() - 1]
     } else {
         s
@@ -94,6 +122,7 @@ fn test_trim_brackets() {
 
 #[derive(Debug)]
 pub enum ParserError {
+    InputTooShort,
     UnknownSmtpCommand,
     InvalidSmtpCommand(&'static str),
     MissingFromAddress,

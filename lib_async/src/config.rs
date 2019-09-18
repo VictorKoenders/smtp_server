@@ -1,15 +1,22 @@
-use native_tls::Identity;
+use native_tls::{Identity, TlsAcceptor as SyncTlsAcceptor};
 use std::borrow::Cow;
 use std::sync::Arc;
+use tokio_tls::TlsAcceptor as AsyncTlsAcceptor;
 
 #[derive(Clone)]
 pub struct Config {
     pub(crate) max_receive_length: usize,
     pub(crate) hostname: String,
     pub(crate) mail_server_name: String,
-    pub(crate) identity: Option<Arc<Identity>>,
+    pub(crate) tls_acceptor: Option<Arc<AsyncTlsAcceptor>>,
 
     pub(crate) capabilities: Vec<Capability>,
+}
+
+impl Config {
+    pub(crate) fn has_capability(&self, capability: Capability) -> bool {
+        self.capabilities.iter().any(|c| *c == capability)
+    }
 }
 
 pub struct ConfigBuilder {
@@ -23,8 +30,8 @@ impl Default for ConfigBuilder {
                 max_receive_length: usize::max_value(),
                 hostname: String::from("smtp.example.com"),
                 mail_server_name: String::from("Rusty SMTP server"),
-                identity: None,
-                capabilities: vec![Capability::SmtpUtf8],
+                tls_acceptor: None,
+                capabilities: vec![],
             },
         }
     }
@@ -44,8 +51,9 @@ impl ConfigBuilder {
 
         let identity = Identity::from_pkcs12(&identity, password.as_ref())
             .map_err(ConfigBuilderTlsError::NativeTls)?;
-
-        self.config.identity = Some(Arc::new(identity));
+        let tls_acceptor =
+            SyncTlsAcceptor::new(identity).map_err(ConfigBuilderTlsError::NativeTls)?;
+        self.config.tls_acceptor = Some(Arc::new(tls_acceptor.into()));
         self.config.capabilities.push(Capability::StartTls);
 
         Ok(self)
@@ -63,6 +71,7 @@ impl ConfigBuilder {
 
     pub fn with_max_size(mut self, max_size: usize) -> Self {
         self.config.max_receive_length = max_size;
+        self.config.capabilities.push(Capability::Size);
         self
     }
 
@@ -145,7 +154,7 @@ impl Capability {
     pub(crate) fn to_cow_str(&self, config: &Config) -> Cow<'static, str> {
         match self {
             Capability::Size => format!("SIZE {}", config.max_receive_length).into(),
-            Capability::StartTls => "STARTLS".into(),
+            Capability::StartTls => "STARTTLS".into(),
             Capability::SmtpUtf8 => "SMTPUTF8".into(),
             _ => unimplemented!(),
         }

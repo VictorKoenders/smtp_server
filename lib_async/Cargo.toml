@@ -8,9 +8,10 @@ edition = "2018"
 
 [dependencies]
 tokio = "0.2.0-alpha.4"
-tokio-tls = "0.2.0-alpha.4"
+tokio-tls = "0.3.0-alpha.4"
 tokio-net = "0.2.0-alpha.4"
 async-trait = "0.1"
 bytes = "0.4"
 mailparse = "0.8"
 native-tls = "0.2"
+futures-preview = "0.3.0-alpha.18"

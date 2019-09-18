@@ -7,8 +7,8 @@ use std::net::{IpAddr, Ipv4Addr};
 #[tokio::main]
 async fn main() {
     let config = ConfigBuilder::default()
-        .with_hostname("mail.trangar.com")
-        .with_server_name("Trangar's NIH mail server")
+        .with_hostname("trangar.com")
+        .with_server_name("Trangars NIH mail server")
         .with_max_size(1024 * 1024 * 1024 * 10 /* 10 MB */)
         .with_pkcs12_certificate("certificate.pfx", "")
         .expect("Could not load certificate.pfx")
@@ -21,14 +21,20 @@ async fn main() {
         capabilities: vec![Capability::StartTls, Capability::Size, Capability::SmtpUtf8],
     }
     */
-    let server = SmtpServer::create(
-        (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 25),
-        Handler,
-        config,
-    )
-    .await
-    .unwrap();
-    server.run().await.expect("Server died");
+    let mut server = SmtpServer::create(Handler, config);
+    server
+        .register_listener((IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 25))
+        .await
+        .expect("Could not listen on port 25");
+    server
+        .register_listener((IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 587))
+        .await
+        .expect("Could not listen on port 587");
+    server
+        .register_tls_listener((IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 465))
+        .await
+        .expect("Could not listen on port 465");
+    server.run().await;
 }
 
 #[derive(Clone)]
