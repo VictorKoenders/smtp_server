@@ -6,7 +6,7 @@ mod flow;
 mod handler;
 mod smtp;
 
-pub use self::config::{Capability, Config, ConfigBuilder};
+pub use self::config::{Builder, Capability, Config};
 use self::connection::Connection;
 pub use self::flow::Flow;
 pub use self::handler::{Email, Handler};
@@ -26,7 +26,7 @@ pub struct SmtpServer {
 
 impl SmtpServer {
     pub fn create(handler: impl Handler, config: Config) -> Self {
-        SmtpServer {
+        Self {
             listeners: Vec::new(),
             handler: Box::new(handler),
             config,
@@ -47,7 +47,7 @@ impl SmtpServer {
         &mut self,
         addr: A,
     ) -> std::io::Result<()> {
-        if !self.config.has_capability(Capability::StartTls) {
+        if !self.config.has_capability(&Capability::StartTls) {
             panic!("Can not register TLS listener when TLS is not configured\nTry calling ConfigBuilder::default().with_pkcs12_certificate(..)");
         }
         let listener = TcpListener::bind(addr).await?;
@@ -162,7 +162,7 @@ where
 {
     let mut bytes = BytesMut::new();
     'outer: loop {
-        let mut buffer = [0u8; 1024];
+        let mut buffer = [0_u8; 1024];
         match socket.read(&mut buffer).await {
             Ok(0) => {
                 println!("[{}] Client disconnected", addr);

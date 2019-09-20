@@ -1,13 +1,16 @@
 use std::collections::HashMap;
 
 pub enum Command {
+    #[allow(dead_code)]
     Ehlo {
         host: String,
     },
+    #[allow(dead_code)]
     MailFrom {
         address: String,
         headers: HashMap<String, String>,
     },
+    #[allow(dead_code)]
     RecipientTo {
         address: String,
     },
@@ -22,7 +25,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub fn parse(line: &str) -> Result<Command, ParserError> {
+    pub fn parse(line: &str) -> Result<Self, ParserError> {
         match line
             .get(..4)
             .ok_or(ParserError::InputTooShort)?
@@ -31,7 +34,7 @@ impl Command {
         {
             "ehlo" => {
                 let host = line.get(4..).unwrap_or("").trim().to_owned();
-                Ok(Command::Ehlo { host })
+                Ok(Self::Ehlo { host })
             }
             "mail" => {
                 if line
@@ -39,12 +42,8 @@ impl Command {
                     .ok_or(ParserError::InputTooShort)?
                     .to_ascii_lowercase()
                     .as_str()
-                    != "from"
+                    == "from"
                 {
-                    Err(ParserError::InvalidSmtpCommand(
-                        "MAIL FROM command is missing required fragment FROM",
-                    ))
-                } else {
                     let remaining = line.get(10..).ok_or(ParserError::InputTooShort)?.trim();
                     let mut parts = remaining.split(' ');
                     let address =
@@ -60,7 +59,11 @@ impl Command {
                             }
                         })
                         .collect();
-                    Ok(Command::MailFrom { address, headers })
+                    Ok(Self::MailFrom { address, headers })
+                } else {
+                    Err(ParserError::InvalidSmtpCommand(
+                        "MAIL FROM command is missing required fragment FROM",
+                    ))
                 }
             }
             "rcpt" => {
@@ -69,24 +72,24 @@ impl Command {
                     .ok_or(ParserError::InputTooShort)?
                     .to_ascii_lowercase()
                     .as_str()
-                    != "to"
+                    == "to"
                 {
-                    Err(ParserError::InvalidSmtpCommand(
-                        "RCPT TO command is missing required fragment TO",
-                    ))
-                } else {
                     let address =
                         trim_brackets(line.get(8..).ok_or(ParserError::InputTooShort)?.trim())
                             .to_owned();
-                    Ok(Command::RecipientTo { address })
+                    Ok(Self::RecipientTo { address })
+                } else {
+                    Err(ParserError::InvalidSmtpCommand(
+                        "RCPT TO command is missing required fragment TO",
+                    ))
                 }
             }
-            "data" => Ok(Command::Data),
-            "rset" => Ok(Command::Reset),
-            "quit" => Ok(Command::Quit),
+            "data" => Ok(Self::Data),
+            "rset" => Ok(Self::Reset),
+            "quit" => Ok(Self::Quit),
             "star" => {
                 if line.trim().to_ascii_lowercase() == "starttls" {
-                    Ok(Command::StartTls)
+                    Ok(Self::StartTls)
                 } else {
                     Err(ParserError::UnknownSmtpCommand)
                 }

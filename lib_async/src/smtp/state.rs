@@ -5,13 +5,16 @@ use crate::{Capability, Config, Flow};
 pub enum State {
     Initial,
     EhloReceived,
+    #[allow(dead_code)]
     SenderReceived {
         sender: String,
     },
+    #[allow(dead_code)]
     RecipientReceived {
         sender: String,
         recipient: String,
     },
+    #[allow(dead_code)]
     ReceivingBody {
         sender: String,
         recipient: String,
@@ -27,7 +30,7 @@ impl State {
         config: &Config,
         is_tls: bool,
     ) -> Result<Flow, Error> {
-        match State::handle_command_impl(self.clone(), command, config, is_tls) {
+        match Self::handle_command_impl(self.clone(), command, config, is_tls) {
             Ok((new_state, flow)) => {
                 *self = new_state;
                 Ok(flow)
@@ -37,13 +40,13 @@ impl State {
     }
 
     fn handle_command_impl(
-        state: State,
+        state: Self,
         command: Command,
         config: &Config,
         is_tls: bool,
-    ) -> Result<(State, Flow), Error> {
+    ) -> Result<(Self, Flow), Error> {
         Ok(match (state, command) {
-            (State::Initial, Command::Ehlo { host }) => {
+            (Self::Initial, Command::Ehlo { host }) => {
                 let mut result = vec![format!("{}, nice to meet you!", host).into()];
                 for capability in &config.capabilities {
                     if is_tls && capability == &Capability::StartTls {
@@ -54,16 +57,16 @@ impl State {
                     result.push(capability.to_cow_str(config));
                 }
                 (
-                    State::EhloReceived,
+                    Self::EhloReceived,
                     Flow::ReplyMultiline(Flow::status_ok(), result),
                 )
             }
-            (State::EhloReceived, Command::MailFrom { address, .. }) => (
-                State::SenderReceived { sender: address },
+            (Self::EhloReceived, Command::MailFrom { address, .. }) => (
+                Self::SenderReceived { sender: address },
                 Flow::Reply(Flow::status_ok(), "Tell them I said hi".into()),
             ),
-            (State::SenderReceived { sender }, Command::RecipientTo { address }) => (
-                State::RecipientReceived {
+            (Self::SenderReceived { sender }, Command::RecipientTo { address }) => (
+                Self::RecipientReceived {
                     sender,
                     recipient: address,
                 },
@@ -72,8 +75,8 @@ impl State {
                     "I'll make sure to get this to them".into(),
                 ),
             ),
-            (State::RecipientReceived { sender, recipient }, Command::Data) => (
-                State::ReceivingBody {
+            (Self::RecipientReceived { sender, recipient }, Command::Data) => (
+                Self::ReceivingBody {
                     sender,
                     recipient,
                     body: Vec::new(),
@@ -83,19 +86,19 @@ impl State {
                     "Go ahead, I'm listening (end with \\r\\n.\\r\\n)".into(),
                 ),
             ),
-            (State::Done, Command::Reset) => (
-                State::EhloReceived,
+            (Self::Done, Command::Reset) => (
+                Self::EhloReceived,
                 Flow::Reply(Flow::status_ok(), "We're ready to go another round!".into()),
             ),
-            (_, Command::Quit) => (State::Initial, Flow::Quit),
+            (_, Command::Quit) => (Self::Initial, Flow::Quit),
             (_, Command::Reset) => (
-                State::EhloReceived,
+                Self::EhloReceived,
                 Flow::Reply(Flow::status_ok(), "I'm sorry, who are you again?".into()),
             ),
-            (State::EhloReceived, Command::StartTls)
-                if config.has_capability(Capability::StartTls) =>
+            (Self::EhloReceived, Command::StartTls)
+                if config.has_capability(&Capability::StartTls) =>
             {
-                (State::Initial, Flow::UpgradeTls)
+                (Self::Initial, Flow::UpgradeTls)
             }
             (state, _) => {
                 return Err(Error::UnknownCommand {
@@ -107,12 +110,12 @@ impl State {
 
     fn expected(&self) -> &'static str {
         match self {
-            State::Initial => "EHLO",
-            State::EhloReceived { .. } => "MAIL FROM",
-            State::SenderReceived { .. } => "RCPT TO",
-            State::RecipientReceived { .. } => "BODY",
-            State::ReceivingBody { .. } => unreachable!(),
-            State::Done { .. } => "QUIT or RSET",
+            Self::Initial => "EHLO",
+            Self::EhloReceived { .. } => "MAIL FROM",
+            Self::SenderReceived { .. } => "RCPT TO",
+            Self::RecipientReceived { .. } => "BODY",
+            Self::ReceivingBody { .. } => unreachable!(),
+            Self::Done { .. } => "QUIT or RSET",
         }
     }
 }

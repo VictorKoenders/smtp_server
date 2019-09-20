@@ -14,74 +14,69 @@ pub struct Config {
 }
 
 impl Config {
-    pub(crate) fn has_capability(&self, capability: Capability) -> bool {
-        self.capabilities.iter().any(|c| *c == capability)
+    pub(crate) fn has_capability(&self, capability: &Capability) -> bool {
+        self.capabilities.iter().any(|c| c == capability)
     }
 }
 
-pub struct ConfigBuilder {
-    config: Config,
-}
+pub struct Builder(Config);
 
-impl Default for ConfigBuilder {
-    fn default() -> ConfigBuilder {
-        ConfigBuilder {
-            config: Config {
-                max_receive_length: usize::max_value(),
-                hostname: String::from("smtp.example.com"),
-                mail_server_name: String::from("Rusty SMTP server"),
-                tls_acceptor: None,
-                capabilities: vec![],
-            },
-        }
+impl Default for Builder {
+    fn default() -> Self {
+        Self(Config {
+            max_receive_length: usize::max_value(),
+            hostname: String::from("smtp.example.com"),
+            mail_server_name: String::from("Rusty SMTP server"),
+            tls_acceptor: None,
+            capabilities: vec![],
+        })
     }
 }
 
-impl ConfigBuilder {
+impl Builder {
     pub fn with_pkcs12_certificate(
         mut self,
         file: impl AsRef<std::path::Path>,
         password: impl AsRef<str>,
-    ) -> Result<ConfigBuilder, ConfigBuilderTlsError> {
+    ) -> Result<Self, BuilderTlsError> {
         use std::io::Read;
-        let mut file = std::fs::File::open(file).map_err(ConfigBuilderTlsError::Io)?;
+        let mut file = std::fs::File::open(file).map_err(BuilderTlsError::Io)?;
         let mut identity = vec![];
         file.read_to_end(&mut identity)
-            .map_err(ConfigBuilderTlsError::Io)?;
+            .map_err(BuilderTlsError::Io)?;
 
         let identity = Identity::from_pkcs12(&identity, password.as_ref())
-            .map_err(ConfigBuilderTlsError::NativeTls)?;
-        let tls_acceptor =
-            SyncTlsAcceptor::new(identity).map_err(ConfigBuilderTlsError::NativeTls)?;
-        self.config.tls_acceptor = Some(Arc::new(tls_acceptor.into()));
-        self.config.capabilities.push(Capability::StartTls);
+            .map_err(BuilderTlsError::NativeTls)?;
+        let tls_acceptor = SyncTlsAcceptor::new(identity).map_err(BuilderTlsError::NativeTls)?;
+        self.0.tls_acceptor = Some(Arc::new(tls_acceptor.into()));
+        self.0.capabilities.push(Capability::StartTls);
 
         Ok(self)
     }
 
     pub fn with_hostname(mut self, hostname: impl Into<String>) -> Self {
-        self.config.hostname = hostname.into();
+        self.0.hostname = hostname.into();
         self
     }
 
     pub fn with_server_name(mut self, mail_server_name: impl Into<String>) -> Self {
-        self.config.mail_server_name = mail_server_name.into();
+        self.0.mail_server_name = mail_server_name.into();
         self
     }
 
     pub fn with_max_size(mut self, max_size: usize) -> Self {
-        self.config.max_receive_length = max_size;
-        self.config.capabilities.push(Capability::Size);
+        self.0.max_receive_length = max_size;
+        self.0.capabilities.push(Capability::Size);
         self
     }
 
     pub fn build(self) -> Config {
-        self.config
+        self.0
     }
 }
 
 #[derive(Debug)]
-pub enum ConfigBuilderTlsError {
+pub enum BuilderTlsError {
     Io(std::io::Error),
     NativeTls(native_tls::Error),
 }
@@ -153,9 +148,9 @@ pub enum Capability {
 impl Capability {
     pub(crate) fn to_cow_str(&self, config: &Config) -> Cow<'static, str> {
         match self {
-            Capability::Size => format!("SIZE {}", config.max_receive_length).into(),
-            Capability::StartTls => "STARTTLS".into(),
-            Capability::SmtpUtf8 => "SMTPUTF8".into(),
+            Self::Size => format!("SIZE {}", config.max_receive_length).into(),
+            Self::StartTls => "STARTTLS".into(),
+            Self::SmtpUtf8 => "SMTPUTF8".into(),
             _ => unimplemented!(),
         }
     }
