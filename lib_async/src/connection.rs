@@ -3,6 +3,7 @@ use bytes::BytesMut;
 use tokio::codec::{Decoder, LinesCodec, LinesCodecError};
 use tokio::net::TcpStream;
 use tokio_tls::TlsStream;
+use std::net::SocketAddr;
 
 use crate::smtp::{
     Command as SmtpCommand, CommandParserError as SmtpCommandParserError, State as SmtpState,
@@ -13,6 +14,8 @@ use crate::{Config, Email, Handler};
 pub struct Connection {
     codec: LinesCodec,
     smtp: SmtpState,
+    peer_addr: SocketAddr,
+    used_ssl: bool,
     pub(crate) config: Config,
     handler: Box<dyn Handler>,
 }
@@ -42,6 +45,8 @@ impl Connection {
             .with_max_size(1024 * 1024)
             .build();
         Self {
+            socket_addr: SocketAddr::V4(std::net::ipv4Addr::LOCALHOST, 1234),
+            used_ssl: true,
             codec: LinesCodec::new_with_max_length(config.max_receive_length),
             smtp: SmtpState::Initial,
             config,
@@ -49,8 +54,10 @@ impl Connection {
         }
     }
 
-    pub fn new(config: Config, handler: Box<dyn Handler>) -> Self {
+    pub fn new(config: Config, handler: Box<dyn Handler>, peer_addr: SocketAddr, used_ssl: bool) -> Self {
         Self {
+            peer_addr,
+            used_ssl,
             codec: LinesCodec::new_with_max_length(config.max_receive_length),
             smtp: SmtpState::Initial,
             config,
@@ -71,7 +78,7 @@ impl Connection {
         recipient: String,
         body: Vec<u8>,
     ) -> Result<(), ClientError> {
-        let email = Email::parse(&sender, &recipient, &body).map_err(ClientError::EmailParse)?;
+        let email = Email::parse(self.peer_addr, self.used_ssl,&sender, &recipient, &body).map_err(ClientError::EmailParse)?;
         self.handler
             .save_email(&email)
             .await
@@ -129,11 +136,17 @@ impl Connection {
     }
 
     pub async fn upgrade_tls(
-        &self,
+        &mut self,
         stream: TcpStream,
     ) -> Result<TlsStream<TcpStream>, native_tls::Error> {
         let acceptor = self.config.tls_acceptor.as_ref().expect("Software tried to upgrade a TCP stream, but no TLS acceptor was configured. This is a bug");
-        acceptor.accept(stream).await
+        match acceptor.accept(stream).await {
+            Ok(result) => {
+                self.used_ssl = true;
+                Ok(result)
+            },
+            Err(e) => Err(e)
+        }
     }
 }
 

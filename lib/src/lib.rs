@@ -1,9 +1,6 @@
 #![feature(
-    async_await,
     async_closure,
-    await_macro,
     proc_macro_hygiene,
-    pin_into_inner
 )]
 
 pub extern crate log;

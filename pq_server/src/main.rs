@@ -1,10 +1,9 @@
-#![feature(async_await)]
-
-use fallible_iterator::FallibleIterator;
 use postgres::{Client, NoTls, Transaction};
-use smtp_server::{Config, Email, MailHandler};
+use smtp_server::{ConfigBuilder, Email, mailparse, async_trait, SmtpServer, tokio};
 use std::fmt::Write;
 use uuid::Uuid;
+use fallible_iterator::FallibleIterator;
+use std::net::{IpAddr, Ipv4Addr};
 
 fn get_env(name: &str) -> String {
     match std::env::var(name) {
@@ -12,30 +11,42 @@ fn get_env(name: &str) -> String {
         Err(e) => panic!("Could not find environment variable {:?}: {:?}", name, e),
     }
 }
-#[runtime::main]
+
+#[tokio::main]
 async fn main() {
     let _ = dotenv::dotenv();
     let connection_string = get_env("DATABASE_URL");
-    let mut client =
-        Client::connect(&connection_string, NoTls).expect("Could not connect to server");
-    ensure_table_exists(&mut client);
+    {
+        let mut client =
+            Client::connect(&connection_string, NoTls).expect("Could not connect to server");
+        ensure_table_exists(&mut client);
+        drop(client);
+    }
 
     env_logger::init();
-    let config = Config::build("localhost")
-        // .with_tls_from_pfx("identity.pfx").expect("Could not load identity.pfx")
+    let config = ConfigBuilder::default()
+        .with_server_name("Trangar's NIH server")
+        .with_hostname("localhost")
+        .with_max_size(10*1024*1024)
+        .with_pkcs12_certificate("identity.pfx", "").expect("Could not load identity.pfx")
         .build();
 
-    let result = smtp_server::spawn(config, Handler { client }).await;
-
-    if let Err(e) = result {
-        eprintln!("Server error: {:?}", e);
-    }
-    eprintln!("Server shutting down");
+    let mut server = SmtpServer::create(Handler { connection_string }, config);
+    server
+        .register_listener((IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 25))
+        .await
+        .expect("Could not listen on port 25");
+    server
+        .register_listener((IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 587))
+        .await
+        .expect("Could not listen on port 587");
+    server
+        .register_tls_listener((IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 465))
+        .await
+        .expect("Could not listen on port 465");
+    server.run().await;
 }
 
-struct Handler {
-    client: Client,
-}
 
 fn insert_mail(transaction: &mut Transaction, email: &Email) -> Result<Uuid, failure::Error> {
     println!("Inserting email");
@@ -49,7 +60,7 @@ RETURNING id"#;
         &[
             &email.peer_addr.to_string().as_str(),
             &email.used_ssl,
-            &email.from.as_str(),
+            &email.sender,
         ],
     )?;
     let row = result
@@ -110,38 +121,59 @@ VALUES
     Ok(())
 }
 
-fn try_save_email(transaction: &mut Transaction, email: Email) -> Result<(), failure::Error> {
-    let id = insert_mail(transaction, &email)?;
-    for to in &email.to {
-        insert_mail_to(transaction, id, to)?;
-    }
-    insert_mail_part(transaction, id, None, &email.body)?;
+fn try_save_email(transaction: &mut Transaction, email: &Email) -> Result<(), failure::Error> {
+    let id = insert_mail(transaction, email)?;
+    insert_mail_to(transaction, id, &email.recipient)?;
+    insert_mail_part(transaction, id, None, &email.email)?;
     println!("Inserted mail {:?}", id);
     Ok(())
 }
 
-fn try_run_transaction(client: &mut Client, email: Email) -> Result<bool, failure::Error> {
-    let mut transaction = client.transaction()?;
-    if let Err(e) = try_save_email(&mut transaction, email) {
-        eprintln!("Could not save email: {:?}", e);
-        eprintln!("Email is LOST");
-        transaction.rollback()?;
-        Ok(false)
-    } else {
-        transaction.commit()?;
-        Ok(true)
-    }
+struct Handler {
+    connection_string: String
 }
 
-impl MailHandler for Handler {
-    fn handle_mail(&mut self, email: Email) -> bool {
-        match try_run_transaction(&mut self.client, email) {
-            Ok(v) => v,
+impl Handler {
+    fn create_connection(&self) -> Result<Client, failure::Error> {
+        let client =
+            Client::connect(&self.connection_string, NoTls).expect("Could not connect to server");
+        Ok(client)
+    }
+    fn try_save_email(&self, email: &Email) -> Result<(), String> {
+        let mut conn = self.create_connection().map_err(|e| format!("Could not connect to DB server: {:?}", e))?;
+        let mut transaction = conn.transaction().map_err(|e| format!("Could not create transaction: {:?}", e))?;
+        match try_save_email(&mut transaction, email) {
+            Ok(()) => {
+                transaction.commit().map_err(|e| format!("Could not commit transaction: {:?}", e))?;
+                Ok(())
+            }
             Err(e) => {
-                eprintln!("Could not handle DB transaction: {:?}", e);
-                false
+                transaction.rollback().map_err(|inner_e| format!("Could not save email ({:?}) OR rollback transaction ({:?})", e, inner_e))?;
+                Err(format!("Could not save email: {:?}", e))
             }
         }
+        }
+}
+
+#[async_trait]
+impl smtp_server::Handler for Handler {
+    async fn validate_address(&self, _addr: &str) -> bool {
+        true
+    }
+
+    async fn save_email<'a>(&self, email: &Email<'a>) -> Result<(), String> {
+        match self.try_save_email(email) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!("Could not save email:");
+                eprintln!("{:?}", e);
+                Err(e)
+            }
+        }
+    }
+
+    fn clone_box(&self) -> Box<dyn smtp_server::Handler> {
+        Box::new(Handler { connection_string: self.connection_string.clone() })
     }
 }
 

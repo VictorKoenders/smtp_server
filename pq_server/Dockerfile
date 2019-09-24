@@ -5,5 +5,6 @@ RUN apt update && \
     apt install libssl-dev openssl libpq-dev -y
 
 COPY pq_server /pq_server
+COPY identity.pfx /identity.pfx
 
 ENTRYPOINT ["/pq_server"]

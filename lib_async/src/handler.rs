@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use mailparse::ParsedMail;
+use std::net::SocketAddr;
 
 #[async_trait]
 pub trait Handler: Sync + Send + 'static {
@@ -27,11 +28,15 @@ impl Handler for TestHandler {
 
 impl<'a> Email<'a> {
     pub fn parse(
+        peer_addr: SocketAddr,
+        used_ssl: bool,
         sender: &'a str,
         recipient: &'a str,
         body: &'a [u8],
     ) -> Result<Self, mailparse::MailParseError> {
         Ok(Self {
+            peer_addr,
+            used_ssl,
             sender,
             recipient,
             email: mailparse::parse_mail(body)?,
@@ -41,6 +46,8 @@ impl<'a> Email<'a> {
 }
 
 pub struct Email<'a> {
+    pub peer_addr: SocketAddr,
+    pub used_ssl: bool,
     pub sender: &'a str,
     pub recipient: &'a str,
     pub email: ParsedMail<'a>,

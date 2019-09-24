@@ -1,5 +1,3 @@
-#![feature(async_await)]
-
 use smtp_server::{mailparse::ParsedMail, Config, Email, MailHandler};
 
 #[runtime::main]

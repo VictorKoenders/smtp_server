@@ -1,16 +1,20 @@
 #![deny(clippy::indexing_slicing)]
 
 mod config;
-pub mod connection;
 mod flow;
 mod handler;
 mod smtp;
 
-pub use self::config::{Builder, Capability, Config};
-use self::connection::Connection;
+pub mod connection;
+pub extern crate mailparse;
+pub extern crate tokio;
+
+pub use self::config::{Builder as ConfigBuilder, Capability, Config};
 pub use self::flow::Flow;
 pub use self::handler::{Email, Handler};
+pub use async_trait::async_trait;
 
+use self::connection::Connection;
 use bytes::BytesMut;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
@@ -77,7 +81,7 @@ async fn blocking_read(
 ) {
     loop {
         let (socket, addr) = listener.accept().await.expect("Tcp listener crashed");
-        let state = Connection::new(config.clone(), handler.clone_box());
+        let state = Connection::new(config.clone(), handler.clone_box(), addr, is_tls);
         if is_tls {
             tokio::spawn(async move { process_tls(socket, addr, state).await });
         } else {
@@ -111,7 +115,7 @@ async fn process(mut socket: TcpStream, addr: std::net::SocketAddr, mut state: C
     }
 }
 
-async fn process_tls(mut socket: TcpStream, addr: std::net::SocketAddr, state: Connection) {
+async fn process_tls(mut socket: TcpStream, addr: std::net::SocketAddr, mut state: Connection) {
     println!("[{}] Connected", addr);
     let connection_message = state.new_connection_message();
     println!("OUT {}", connection_message.trim());

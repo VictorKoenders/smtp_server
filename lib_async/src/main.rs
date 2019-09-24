@@ -1,12 +1,12 @@
 extern crate lib_async;
 
 use async_trait::async_trait;
-use lib_async::{Builder, Email, SmtpServer};
+use lib_async::{ConfigBuilder, Email, SmtpServer};
 use std::net::{IpAddr, Ipv4Addr};
 
 #[tokio::main]
 async fn main() {
-    let config = Builder::default()
+    let config = ConfigBuilder::default()
         .with_hostname("trangar.com")
         .with_server_name("Trangars NIH mail server")
         .with_max_size(1024 * 1024 * 1024 * 10 /* 10 MB */)
